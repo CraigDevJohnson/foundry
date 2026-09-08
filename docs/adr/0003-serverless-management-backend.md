@@ -1,5 +1,5 @@
 ---
-status: proposed
+status: accepted
 ---
 
 # Use a Go Lambda controller with Systems Manager Automation
@@ -52,7 +52,7 @@ but the required instance transitions and fixed commands fit SSM Automation's
 native actions. Direct Run Command alone would leave more admission, waiting,
 and recovery behavior in custom application code.
 
-The proposed additions charge mainly for backup storage, Automation steps,
+These additions charge mainly for backup storage, Automation steps,
 Lambda/database requests, and bounded logs. Restore drills temporarily add an
 isolated EC2 instance and its volumes. There is no requirement for another
 always-running server, public API, NAT gateway, or load balancer. A costed
@@ -76,8 +76,8 @@ the restore target must remain isolated from players. Rates are recorded in the
 world data, retained object versions, logs, or longer drills increase cost;
 these examples use no free-tier credit.
 
-This is a proposed architecture for the final design review. Its approval does
-not establish that the implementation or live adoption has been completed.
+Craig accepted this architecture on 2026-09-08. Implementation and live adoption
+remain subject to the first-release specification and its verification gates.
 
 ## Sources
 

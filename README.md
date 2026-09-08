@@ -7,8 +7,8 @@ This repository will own the tools for operating that installation. The first
 release serves Craig as its sole operator and supports a game with at most five
 concurrent users. The portfolio provides the management interface; this
 repository owns the Foundry backend, operations, and reproducible host and
-service setup. The operating policy below captures the agreed design interview
-answers and is awaiting a final shared-understanding review before implementation.
+service setup. The operating policy and backend architecture were confirmed
+through the design interview on 2026-09-08.
 
 ## Agreed first-release scope
 
@@ -63,8 +63,8 @@ management plane is relied upon.
   records the management boundary.
 - [Session-based recovery](docs/adr/0002-session-based-recovery.md) records the
   availability and recovery trade-off.
-- [Proposed backend architecture](docs/adr/0003-serverless-management-backend.md)
-  describes the recommended implementation for final design review.
+- [Backend architecture](docs/adr/0003-serverless-management-backend.md) records
+  the accepted Go Lambda and Systems Manager implementation direction.
 
 ## Development
 
