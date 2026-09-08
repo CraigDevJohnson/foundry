@@ -65,6 +65,7 @@ management plane is relied upon.
   availability and recovery trade-off.
 - [Backend architecture](docs/adr/0003-serverless-management-backend.md) records
   the accepted Go Lambda and Systems Manager implementation direction.
+- [Status API](docs/status-api.md) documents the first read-only backend slice.
 
 ## Development
 
@@ -72,8 +73,15 @@ Use a branch and pull request for changes to `main`. The security workflow scans
 Git history and current files for secrets and checks GitHub Actions workflows.
 Dependabot checks GitHub Actions dependencies weekly.
 
-Application code and dependency manifests have not been added yet. Add suitable
-code and dependency scans when the application stack is chosen.
+The first implementation slice provides a Go Lambda status controller and a
+local read-only runner. It reports host, agent, and HTTPS observations; session
+mutations, backup/recovery tooling, infrastructure, and portfolio integration
+remain tracked in the [first-release backlog](https://github.com/CraigDevJohnson/foundry/issues/2).
+
+Use Go 1.27.1 or newer and run `make ci` for formatting, vet, race-enabled tests,
+a Linux ARM64 Lambda build, and vulnerability checks. `make build` produces
+`dist/bootstrap.zip`. See the [status reference](docs/status-api.md) for required
+configuration and local invocation.
 
 ## Security
 
