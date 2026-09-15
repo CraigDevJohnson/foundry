@@ -1,0 +1,11 @@
+[Unit]
+Description=Fetch due Foundry certificate while the host is running
+
+[Timer]
+OnCalendar=*-*-* 00,12:00:00
+Persistent=true
+RandomizedDelaySec=15m
+Unit=foundry-cert-renew.service
+
+[Install]
+WantedBy=timers.target

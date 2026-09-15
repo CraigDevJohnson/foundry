@@ -1,0 +1,10 @@
+[Unit]
+Description=Fetch Foundry certificate without interrupting a session
+Wants=network-online.target time-sync.target
+After=network-online.target time-sync.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/foundry-host renew
+TimeoutStartSec=240
+UMask=0077

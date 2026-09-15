@@ -1,0 +1,39 @@
+name: Host contract
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  offline:
+    name: Offline lifecycle and templates
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Test host failure behavior and rendering
+        run: python3 -m unittest discover -s tests -v
+      - name: Prepare inert executables for syntax verification
+        run: |
+          sudo install -m 0755 /usr/bin/true /usr/local/sbin/foundry-host
+          if [ ! -x /usr/bin/node ]; then
+            sudo install -m 0755 /usr/bin/true /usr/bin/node
+          fi
+      - name: Verify systemd templates without starting services
+        run: |
+          systemd-analyze verify --man=no \
+            host/templates/foundry.service \
+            host/templates/foundry-cert-renew.service \
+            host/templates/foundry-cert-renew.timer
