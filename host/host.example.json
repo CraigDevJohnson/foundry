@@ -1,0 +1,29 @@
+{
+  "schema": 1,
+  "setup_revision": null,
+  "os": {
+    "ami_id": null,
+    "architecture": "aarch64",
+    "system_release": null
+  },
+  "mount_uuid": null,
+  "uid": null,
+  "gid": null,
+  "node_version": "24.18.1",
+  "node_binary_sha256": null,
+  "node_archive_sha256": null,
+  "foundry_version": "14.366.0",
+  "foundry_main_sha256": null,
+  "foundry_archive_sha256": null,
+  "worlds": null,
+  "rpms": {
+    "python3": null,
+    "systemd": null,
+    "openssl": null,
+    "certbot": null,
+    "iproute": null,
+    "util-linux": null,
+    "curl": null,
+    "ca-certificates": null
+  }
+}

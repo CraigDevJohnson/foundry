@@ -1,0 +1,25 @@
+[Unit]
+Description=Foundry VTT service
+Wants=network-online.target time-sync.target
+After=network-online.target time-sync.target
+RequiresMountsFor=/foundry
+
+[Service]
+Type=exec
+User=foundry
+Group=foundry
+WorkingDirectory=/foundry/foundryvtt
+ExecStartPre=+/usr/local/sbin/foundry-host preflight
+ExecStart=/usr/bin/node /foundry/foundryvtt/main.js --dataPath=/foundry/foundrydata --port=30000
+KillSignal=SIGTERM
+KillMode=control-group
+SendSIGKILL=no
+TimeoutStartSec=600
+TimeoutStopSec=90
+Restart=no
+UMask=0007
+NoNewPrivileges=yes
+PrivateTmp=yes
+
+[Install]
+WantedBy=multi-user.target

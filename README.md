@@ -57,6 +57,10 @@ management plane is relied upon.
 - [Domain glossary](CONTEXT.md) defines the project's terms.
 - [Hosting baseline](docs/hosting-baseline.md) records the existing installation
   and related management tools verified during discovery.
+- [Host lifecycle contract](docs/host-contract.md) defines the pinned inputs,
+  filesystem paths, fixed commands, and offline checks for issue #5.
+- [Host adoption and rollback](docs/host-adoption.md) records the separate
+  authorized live procedure and remaining proof required before reliance.
 - [First-release specification](https://github.com/CraigDevJohnson/foundry/issues/2)
   contains the consolidated scope, acceptance checks, and adoption prerequisites.
 - [Portfolio and Foundry responsibilities](docs/adr/0001-portfolio-and-foundry-responsibilities.md)
@@ -72,6 +76,14 @@ management plane is relied upon.
 Use a branch and pull request for changes to `main`. The security workflow scans
 Git history and current files for secrets and checks GitHub Actions workflows.
 Dependabot checks GitHub Actions dependencies weekly.
+
+Run `python3 -m unittest discover -s tests -v` for the offline host contract
+suite. The Host contract workflow also parses the systemd templates without
+starting services. The host tooling uses only the Python standard library.
+
+The example manifest intentionally has unresolved host-specific pins. Read the
+host contract before rendering a private installation tree. Rendering never
+installs files or contacts the host.
 
 The first implementation slice provides a Go Lambda status controller and a
 local read-only runner. It reports host, agent, and HTTPS observations; session
