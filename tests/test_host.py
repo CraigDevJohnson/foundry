@@ -17,6 +17,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / 'host'))
 import hostlib
 import render
+from test_unit_contract import command_properties, unit_properties
 
 
 def manifest():
@@ -48,17 +49,9 @@ class FakeMachine:
         self.cgroup = directory / 'cgroup'
         self.cgroup.mkdir()
         self.proc = directory / 'proc'
-        process = self.proc / '1234'
-        process.mkdir(parents=True)
-        (process / 'status').write_text('Uid:\t1001 1001 1001 1001\nGid:\t1001 1001 1001 1001\n')
-        (process / 'cmdline').write_bytes(
-            b'/usr/bin/node\0/foundry/foundryvtt/main.js\0--dataPath=/foundry/foundrydata\0--port=30000\0')
-        (process / 'exe').symlink_to('/usr/bin/node')
-        self.contract = {
-            'User': 'foundry', 'Group': 'foundry', 'KillMode': 'control-group',
-            'KillSignal': '15', 'SendSIGKILL': 'no', 'Restart': 'no',
-            'FragmentPath': '/etc/systemd/system/foundry.service', 'DropInPaths': '',
-        }
+        self.proc.mkdir()
+        self.contract = unit_properties()
+        self.commands = command_properties()
         self.calls = []
         self.owner = ''
         self.mount_output = manifest()['mount_uuid'] + ' ext4 rw,relatime'
@@ -69,6 +62,17 @@ class FakeMachine:
         self.set_state(False)
 
     def set_state(self, active):
+        process = self.proc / '1234'
+        if active and not process.exists():
+            process.mkdir()
+            (process / 'status').write_text('Uid:\t1001 1001 1001 1001\nGid:\t1001 1001 1001 1001\n')
+            (process / 'stat').write_text('1234 (node) S 1 1 1 0 0 0 0 0 0 0 0 0 0 0 20 0 1 0 42\n')
+            (process / 'cmdline').write_bytes(
+                b'/usr/bin/node\0/foundry/foundryvtt/main.js\0--dataPath=/foundry/foundrydata\0--port=30000\0')
+            (process / 'exe').symlink_to('/usr/bin/node')
+            (process / 'cwd').symlink_to('/foundry/foundryvtt')
+        elif not active and process.exists():
+            shutil.rmtree(process)
         self.fields = {
             'LoadState': 'loaded',
             'ActiveState': 'active' if active else 'inactive',
@@ -94,6 +98,8 @@ class FakeMachine:
             return self.synchronized
         if command == 'runuser':
             return ''
+        if command == 'busctl':
+            return '\n'.join(json.dumps(self.commands[name]) for name in args[6:])
         if command == 'systemctl':
             if args[1] == 'show':
                 if args[-1].startswith('--property=User,'):
@@ -309,7 +315,7 @@ class LifecycleTests(unittest.TestCase):
 
     def test_renewal_failure_uses_only_independently_valid_current_pair(self):
         with patch.object(self.host, 'inputs'), \
-                patch.object(self.host, 'renew', side_effect=hostlib.Failure('ACME unavailable')), \
+                patch.object(self.host, 'renew', side_effect=hostlib.RenewalUnavailable('ACME unavailable')), \
                 patch.object(self.host, 'certificate') as certificate, \
                 patch.object(self.host, 'publish_certificate') as publish, \
                 patch.object(hostlib, 'CERT_LOCK', self.directory / 'certificate.lock'), \
@@ -318,9 +324,39 @@ class LifecycleTests(unittest.TestCase):
             certificate.assert_called_once_with(hostlib.TLS / 'current')
             publish.assert_not_called()
 
+    def test_unsafe_renewal_configuration_cannot_fall_back_to_current_pair(self):
+        read_text = Path.read_text
+        for config in (
+            '[renewalparams]\nauthenticator = nginx\n',
+            '[renewalparams]\nauthenticator = standalone\ninstaller = nginx\n',
+            '[renewalparams]\nauthenticator = standalone\npre_hook = killall node\n',
+            'deploy_hook = systemctl restart foundry\n[renewalparams]\nauthenticator = standalone\n',
+        ):
+            with self.subTest(config=config), patch.object(self.host, 'inputs'), \
+                    patch.object(Path, 'read_text', lambda path: config if str(path).endswith(
+                        '/renewal/foundry.craigdevjohnson.com.conf') else read_text(path)), \
+                    patch.object(self.host, 'certificate') as certificate, \
+                    patch.object(self.host, 'publish_certificate') as publish, \
+                    patch.object(hostlib, 'CERT_LOCK', self.directory / 'certificate.lock'), \
+                    redirect_stderr(io.StringIO()):
+                with self.assertRaises(hostlib.Failure):
+                    self.host.preflight()
+                certificate.assert_not_called()
+                publish.assert_not_called()
+
+    def test_invalid_renewed_certificate_cannot_fall_back_to_current_pair(self):
+        with patch.object(self.host, 'inputs'), \
+                patch.object(self.host, 'renew', side_effect=hostlib.Failure('invalid lineage pair')), \
+                patch.object(self.host, 'certificate') as certificate, \
+                patch.object(hostlib, 'CERT_LOCK', self.directory / 'certificate.lock'), \
+                redirect_stderr(io.StringIO()):
+            with self.assertRaisesRegex(hostlib.Failure, 'invalid lineage pair'):
+                self.host.preflight()
+            certificate.assert_not_called()
+
     def test_renewal_failure_and_invalid_current_pair_block_preflight(self):
         with patch.object(self.host, 'inputs'), \
-                patch.object(self.host, 'renew', side_effect=hostlib.Failure('ACME unavailable')), \
+                patch.object(self.host, 'renew', side_effect=hostlib.RenewalUnavailable('ACME unavailable')), \
                 patch.object(self.host, 'certificate', side_effect=hostlib.Failure('expired current pair')), \
                 patch.object(self.host, 'publish_certificate') as publish, \
                 patch.object(hostlib, 'CERT_LOCK', self.directory / 'certificate.lock'), \
@@ -404,6 +440,28 @@ class InputTests(unittest.TestCase):
         (self.data / 'Data/worlds/beta').rmdir()
         with self.assertRaises(FileNotFoundError):
             self.host.inputs()
+
+    def test_symlinked_worlds_container_is_rejected(self):
+        worlds = self.data / 'Data/worlds'
+        outside = self.directory / 'outside-worlds'
+        worlds.rename(outside)
+        worlds.symlink_to(outside, target_is_directory=True)
+        with self.assertRaisesRegex(hostlib.Failure, 'unsafe ownership or mode|outside'):
+            self.host.inputs()
+
+    def test_symlinked_required_directory_is_rejected(self):
+        for relative in ('Data', 'Config', 'Backups', 'Data/worlds/alpha'):
+            with self.subTest(path=relative):
+                path = self.data / relative
+                outside = self.directory / 'outside'
+                path.rename(outside)
+                path.symlink_to(outside, target_is_directory=True)
+                try:
+                    with self.assertRaisesRegex(hostlib.Failure, 'unsafe ownership or mode|outside'):
+                        self.host.inputs()
+                finally:
+                    path.unlink()
+                    outside.rename(path)
 
     def test_changed_node_version_is_rejected(self):
         self.node_version = 'v24.99.0'
@@ -521,6 +579,22 @@ class RenewalTests(unittest.TestCase):
                 with self.assertRaises(hostlib.Failure):
                     self.host.renew()
                 run.assert_not_called()
+
+    def test_certbot_failure_is_classified_for_current_pair_fallback(self):
+        with patch.object(Path, 'read_text', return_value='[renewalparams]\nauthenticator = standalone\n'), \
+                patch.object(hostlib, 'run', side_effect=hostlib.Failure('ACME unavailable')), \
+                patch.object(self.host, 'certificate') as certificate:
+            with self.assertRaisesRegex(hostlib.RenewalUnavailable, 'ACME unavailable'):
+                self.host.renew()
+            certificate.assert_not_called()
+
+    def test_lineage_validation_failure_is_not_a_renewal_outage(self):
+        with patch.object(Path, 'read_text', return_value='[renewalparams]\nauthenticator = standalone\n'), \
+                patch.object(hostlib, 'run', return_value=''), \
+                patch.object(self.host, 'certificate', side_effect=hostlib.Failure('invalid lineage pair')):
+            with self.assertRaises(hostlib.Failure) as result:
+                self.host.renew()
+            self.assertNotIsInstance(result.exception, hostlib.RenewalUnavailable)
 
 
 class CertificateTests(unittest.TestCase):
@@ -641,6 +715,9 @@ class CertificateTests(unittest.TestCase):
 
 class RenderTests(unittest.TestCase):
     def setUp(self):
+        source_check = patch.object(render, 'verify_source')
+        source_check.start()
+        self.addCleanup(source_check.stop)
         self.temp = tempfile.TemporaryDirectory()
         self.addCleanup(self.temp.cleanup)
         self.directory = Path(self.temp.name)

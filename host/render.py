@@ -6,7 +6,30 @@ from pathlib import Path
 import shutil
 import sys
 
-from hostlib import Failure, validate_manifest
+from hostlib import Failure, run, validate_manifest
+
+
+def verify_source(source, revision):
+    checkout = source.parent
+    git = ['git', '-C', str(checkout)]
+    try:
+        root = Path(run(git + ['rev-parse', '--show-toplevel'])).resolve()
+        head = run(git + ['rev-parse', 'HEAD'])
+        changes = run(git + ['status', '--porcelain=v1', '--untracked-files=all',
+                             '--ignore-submodules=none'])
+        untracked_inputs = run(git + ['ls-files', '--others', '--',
+                                     'host/templates', 'host/hostlib.py',
+                                     'host/foundry-host', 'host/render.py'])
+    except Failure as exc:
+        raise Failure(f'Cannot verify the source Git checkout: {exc}') from exc
+    if root != checkout:
+        raise Failure('Render from the host directory in the source Git checkout')
+    if head != revision:
+        raise Failure('setup_revision does not match the source Git HEAD')
+    if changes:
+        raise Failure('Render requires a clean Git checkout, including untracked files')
+    if untracked_inputs:
+        raise Failure('Source contains an untracked render input, including ignored files')
 
 
 def render(manifest, output):
@@ -14,6 +37,7 @@ def render(manifest, output):
     if output.exists():
         raise Failure('Output already exists; choose a new staging directory')
     source = Path(__file__).resolve().parent
+    verify_source(source, value['setup_revision'])
     output.mkdir(parents=True)
     files = {
         'etc/foundry/host.json': json.dumps(value, indent=2) + '\n',

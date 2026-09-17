@@ -37,8 +37,12 @@ The runtime checks the OS release, architecture, prerequisite RPMs, Node version
 and binary digest, Foundry version and entry-point digest. The full licensed
 package and AMI provenance are adoption and restore checks.
 
-Render from the clean checkout at `setup_revision` and retain that checkout or
-Git archive with the recovery inventory.
+Render from a clean Git checkout whose `HEAD` equals `setup_revision`. The
+renderer checks Git metadata, tracked changes, and untracked files before
+creating output. It also rejects ignored files that would be copied as render
+inputs. Keep the private manifest and staging output outside the checkout.
+Retain the checkout with its Git metadata in the recovery inventory; an archive
+without Git metadata cannot establish the source revision for rendering.
 
 The runtime uses Python's standard library and supports Python 3.9 or newer.
 There is no package-manager or application update in a lifecycle command.
@@ -68,7 +72,8 @@ pins only through a reviewed maintenance change with a pre-upgrade backup.
 
 Runtime checks reject missing mounts, wrong filesystem UUID/type, read-only
 mounts, unexpected root-directory ownership, symlinked required directories,
-and missing worlds. The adoption audit checks ownership recursively, required
+and missing worlds. They include the `Data/worlds` container and require each
+checked data directory to resolve beneath the data root. The adoption audit checks ownership recursively, required
 files and symlink targets, external asset locations, and available space. Runtime
 checks do not replace that coverage audit. Never create replacement data
 under the root filesystem when `/foundry` is absent.
@@ -139,6 +144,8 @@ A successful stop requires all of the following at observation time:
 - `MainPID=0` and `ControlPID=0`.
 - No processes in the fixed service cgroup or descendant cgroups.
 - No TCP listener on port 30000, including IPv6 and listeners with unknown owners.
+- No unmanaged Foundry or data-path process in the host process inventory,
+  including one that has not opened or has already closed its listener.
 
 A failed unit result blocks start until the operator inspects the journal,
 processes, and data and deliberately reconciles it. Normal commands never use
@@ -147,11 +154,20 @@ Shutdown semantics and persisted game data in the pinned licensed application
 must still be demonstrated during issue #10. Offline tests do not prove a
 successful session backup or database flush.
 
-Readiness verifies the effective systemd user, group, shutdown settings, and
-absence of drop-ins. It checks the process executable, arguments, and all user
+Before requesting startup, the wrapper verifies the effective systemd execution
+and shutdown contract, including the mount dependency, working directory,
+timeouts, environment, privilege settings, and absence of drop-ins or extra
+commands. It reads structured command properties through `busctl` to verify
+exact argument boundaries and the privileged preflight flag. Drift or an
+unloaded unit blocks startup before systemd can execute its commands.
+
+Readiness repeats this contract check. It checks the process executable, arguments, and all user
 and group IDs against the fixed command and manifest. It also requires the
 correct writable mount, an active successful unit, and
-exactly its main PID in both the cgroup and port-30000 listener inventory. A local
+exactly its main PID in the cgroup, port-30000 listener inventory, and Foundry
+process inventory. The process scan checks executable, arguments, and working
+directory across `/proc`; an unreadable live process or reused PID makes the
+result uncertain and blocks the operation. A local
 HTTPS request verifies the public hostname and trusted certificate, bypasses
 proxies, and accepts HTTP 200, 302, or 303 without following a redirect. This
 proves application reachability, not that either world can be played. Issue #10
@@ -195,9 +211,11 @@ reviewed maintenance operation.
 
 Validation checks chain trust, server purpose, hostname, validity dates, at
 least 24 hours of remaining lifetime, key parsing, and certificate/key match.
-The service identity must be able to read both activated files. If renewal
-fails, startup can use the existing active pair only if it independently passes
-all checks. Invalid, expired, not-yet-valid, or missing TLS with failed renewal
+The service identity must be able to read both activated files. If the Certbot
+attempt fails after its configuration passes validation, startup can use the
+existing active pair only if it independently passes all checks. Invalid lineage
+configuration, legacy hooks, installer plugins, and invalid renewed certificate
+material always block startup. Invalid, expired, not-yet-valid, or missing TLS with failed renewal
 blocks startup. A stopped host cannot renew; its next Start session performs
 this check. A still-running session continues using the certificate loaded at
 startup until the next confirmed restart. Persistent runs lasting through

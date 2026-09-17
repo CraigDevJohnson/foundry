@@ -113,7 +113,9 @@ that no other Foundry process exists.
 
 ## 3. Install the reviewed files while Foundry is stopped
 
-1. Render the completed manifest locally and review every generated file.
+1. Render the completed manifest locally from a clean Git checkout whose `HEAD`
+   matches `setup_revision`, and review every generated file. Keep the private
+   manifest and output directory outside that checkout.
    Run the repository's offline checks. Transfer the reviewed result through
    the approved access path and verify its hashes before installing it.
 2. Keep the original dedicated volume mounted at `/foundry`. Match its UUID in
@@ -190,6 +192,10 @@ Require `User=foundry`, `Group=foundry`, `KillMode=control-group`,
 `FragmentPath=/etc/systemd/system/foundry.service` and an empty `DropInPaths`.
 Verify the rendered timeouts remain 600 seconds for startup and 90 seconds for
 shutdown. If a setting differs, reconcile the installed unit before starting.
+The fixed `foundry-host start` command also verifies exact effective launch and
+preflight arguments, privilege flags, environment, mount dependencies, and
+execution settings before requesting startup. A modified or removed preflight
+cannot bypass these checks through the wrapper.
 
 ## 4. Prove the adopted lifecycle
 
@@ -247,8 +253,11 @@ running; inspect `status` before taking another action.
   confirms that `foundry` can read both staged files before starting Node.
   Verify that it reaches HTTPS readiness. Test renewal failure with a still-valid certificate,
   then expired, wrong-name, mismatched-key and malformed certificate material.
+  Verify that unsafe lineage configuration blocks startup even with a valid
+  current certificate.
   With no usable certificate, Foundry must remain unstarted.
 - On the isolated target, test a missing or wrong mount, unmanaged listener,
+  unmanaged Foundry process without a listener, symlinked `Data/worlds`,
   and process that refuses graceful stop. Verify that failure never creates a
   data tree on root, kills an unrelated process, starts a duplicate, or reports
   a safe stop.

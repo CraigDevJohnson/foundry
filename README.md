@@ -69,6 +69,7 @@ management plane is relied upon.
   availability and recovery trade-off.
 - [Backend architecture](docs/adr/0003-serverless-management-backend.md) records
   the accepted Go Lambda and Systems Manager implementation direction.
+- [Status API](docs/status-api.md) documents the first read-only backend slice.
 
 ## Development
 
@@ -83,6 +84,16 @@ starting services. The host tooling uses only the Python standard library.
 The example manifest intentionally has unresolved host-specific pins. Read the
 host contract before rendering a private installation tree. Rendering never
 installs files or contacts the host.
+
+The first implementation slice provides a Go Lambda status controller and a
+local read-only runner. It reports host, agent, and HTTPS observations; session
+mutations, backup/recovery tooling, infrastructure, and portfolio integration
+remain tracked in the [first-release backlog](https://github.com/CraigDevJohnson/foundry/issues/2).
+
+Use Go 1.27.1 or newer and run `make ci` for formatting, vet, race-enabled tests,
+a Linux ARM64 Lambda build, and vulnerability checks. `make build` produces
+`dist/bootstrap.zip`. See the [status reference](docs/status-api.md) for required
+configuration and local invocation.
 
 ## Security
 

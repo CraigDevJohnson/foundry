@@ -39,6 +39,10 @@ class Busy(Failure):
     pass
 
 
+class RenewalUnavailable(Failure):
+    """Certbot could not complete renewal after its configuration was validated."""
+
+
 def run(args, timeout=15):
     try:
         result = subprocess.run(args, capture_output=True, text=True, timeout=timeout,
@@ -56,6 +60,33 @@ def digest(path):
         for chunk in iter(lambda: source.read(1024 * 1024), b''):
             checksum.update(chunk)
     return checksum.hexdigest()
+
+
+def process_identity(process):
+    # comm may contain spaces or parentheses; the remaining fields start at state.
+    prefix, separator, tail = (process / 'stat').read_text().rpartition(') ')
+    fields = tail.split()
+    if not separator or int(prefix.split(' ', 1)[0]) != int(process.name):
+        raise ValueError('Invalid process stat identity')
+    return fields[0], int(fields[6]), int(fields[19])  # state, flags, start time
+
+
+def uses_foundry_paths(args, cwd, executable):
+    # procfs marks unlinked paths while their processes can still hold data open.
+    cwd = Path(str(cwd).removesuffix(' (deleted)'))
+    executable = Path(str(executable).removesuffix(' (deleted)'))
+    node = executable.name in {'node', 'nodejs'}
+    paths = [executable, cwd] if node else [executable]
+    for index, arg in enumerate(args):
+        data_arg = arg.startswith('--dataPath=') or (index > 0 and args[index - 1] == '--dataPath')
+        value = arg.split('=', 1)[1] if arg.startswith('--') and '=' in arg else arg
+        if value and not value.startswith('-') and (node or data_arg or value.startswith(('/', './', '../'))):
+            paths.append(Path(os.path.realpath(cwd / value)))
+    return (cwd == DATA or DATA in cwd.parents
+            or executable.name.casefold() in {'foundry', 'foundryvtt'}
+            or any(root == path or root in path.parents
+                   for path in paths for root in (APP, DATA))
+            or any('foundryvtt' in (part.casefold() for part in path.parts) for path in paths))
 
 
 def validate_manifest(value):
@@ -132,15 +163,72 @@ class Host:
                 or fields[1] != 'ext4' or 'rw' not in fields[2].split(',')):
             raise Failure('Required writable ext4 /foundry mount UUID is missing or wrong')
 
+    def unit_commands(self):
+        # The Ex properties retain argument boundaries and the +/!/- command flags.
+        # systemctl show's human-readable argv joins strings and loses that boundary.
+        commands = {
+            'ExecStartEx': [['/usr/bin/node',
+                             ['/usr/bin/node', '/foundry/foundryvtt/main.js',
+                              '--dataPath=/foundry/foundrydata', '--port=30000'], []]],
+            'ExecStartPreEx': [['/usr/local/sbin/foundry-host',
+                                ['/usr/local/sbin/foundry-host', 'preflight'], ['privileged']]],
+            'ExecConditionEx': [], 'ExecStartPostEx': [], 'ExecReloadEx': [],
+            'ExecStopEx': [], 'ExecStopPostEx': [],
+        }
+        properties = [*commands, 'EnvironmentFiles', 'PermissionsStartOnly']
+        output = run(['/usr/bin/busctl', '--json=short', 'get-property',
+                      'org.freedesktop.systemd1',
+                      '/org/freedesktop/systemd1/unit/foundry_2eservice',
+                      'org.freedesktop.systemd1.Service', *properties])
+        try:
+            values = [json.loads(line) for line in output.splitlines()]
+        except ValueError as exc:
+            raise Failure('Cannot verify effective systemd command contract') from exc
+        if len(values) != len(properties):
+            raise Failure('Incomplete effective systemd command contract')
+        for name, value in zip(properties, values):
+            if name in commands:
+                valid = (isinstance(value, dict) and value.get('type') == 'a(sasasttttuii)'
+                         and isinstance(value.get('data'), list)
+                         and all(isinstance(record, list) and len(record) == 10
+                                 and all(type(field) is int for field in record[3:])
+                                 for record in value['data'])
+                         and [record[:3] for record in value['data']] == commands[name])
+            else:
+                expected = ({'type': 'a(sb)', 'data': []} if name == 'EnvironmentFiles'
+                            else {'type': 'b', 'data': False})
+                valid = value == expected
+            if not valid:
+                raise Failure(f'Effective systemd command contract differs: {name}')
+
     def unit_contract(self):
         expected = {'User': 'foundry', 'Group': 'foundry', 'KillMode': 'control-group',
                     'KillSignal': '15', 'SendSIGKILL': 'no', 'Restart': 'no',
-                    'FragmentPath': '/etc/systemd/system/foundry.service', 'DropInPaths': ''}
+                    'FragmentPath': '/etc/systemd/system/foundry.service', 'DropInPaths': '',
+                    'LoadState': 'loaded', 'NeedDaemonReload': 'no', 'Type': 'exec',
+                    'WorkingDirectory': '/foundry/foundryvtt',
+                    'TimeoutStartUSec': '10min', 'TimeoutStopUSec': '1min 30s',
+                    'TimeoutStartFailureMode': 'terminate', 'TimeoutStopFailureMode': 'terminate',
+                    'UMask': '0007', 'NoNewPrivileges': 'yes', 'PrivateTmp': 'yes',
+                    'RemainAfterExit': 'no', 'DynamicUser': 'no', 'SupplementaryGroups': '',
+                    'Environment': '', 'PassEnvironment': '', 'UnsetEnvironment': '',
+                    'RootDirectory': '', 'RootImage': '', 'BindPaths': '',
+                    'BindReadOnlyPaths': '', 'TemporaryFileSystem': ''}
+        dependencies = {'RequiresMountsFor', 'Requires', 'After', 'Wants'}
         output = run(['/usr/bin/systemctl', 'show', UNIT, '--no-pager',
-                      '--property=' + ','.join(expected)])
-        actual = dict(line.split('=', 1) for line in output.splitlines() if '=' in line)
-        if actual != expected:
-            raise Failure('Effective systemd ownership or shutdown contract differs; review unit and drop-ins')
+                      '--property=' + ','.join([*expected, *sorted(dependencies)])])
+        fields = [line.split('=', 1) for line in output.splitlines() if '=' in line]
+        actual = dict(fields)
+        if (len(fields) != len(actual) or set(actual) != set(expected) | dependencies
+                or any(actual[key] != value for key, value in expected.items())
+                or set(actual['RequiresMountsFor'].split()) != {
+                    '/foundry', '/foundry/foundryvtt', '/var/tmp'}
+                or 'foundry.mount' not in actual['Requires'].split()
+                or not {'foundry.mount', 'network-online.target', 'time-sync.target'}
+                    <= set(actual['After'].split())
+                or not {'network-online.target', 'time-sync.target'} <= set(actual['Wants'].split())):
+            raise Failure('Effective systemd launch or shutdown contract differs; review unit and drop-ins')
+        self.unit_commands()
 
     def inputs(self):
         self.mount()
@@ -167,12 +255,15 @@ class Host:
             stat = path.stat()
             if path.is_symlink() or stat.st_uid != 0 or stat.st_mode & 0o022:
                 raise Failure(f'Application parent must be root-owned and not writable by others: {path}')
-        for path in (DATA, DATA / 'Data', DATA / 'Config', DATA / 'Backups',
+        data_root = DATA.resolve(strict=True)
+        for path in (DATA, DATA / 'Data', DATA / 'Data/worlds', DATA / 'Config', DATA / 'Backups',
                      *(DATA / 'Data/worlds' / world for world in pin['worlds'])):
             stat = path.stat()
             if (path.is_symlink() or not path.is_dir() or
                     (stat.st_uid, stat.st_gid) != (pin['uid'], pin['gid']) or stat.st_mode & 0o007):
                 raise Failure(f'Required data directory has unsafe ownership or mode: {path}')
+            if not path.resolve(strict=True).is_relative_to(data_root):
+                raise Failure(f'Required data directory resolves outside the data root: {path}')
         options = json.loads((DATA / 'Config/options.json').read_text())
         expected = {'port': 30000, 'hostname': HOSTNAME,
                     'sslCert': str(TLS / 'current/fullchain.pem'),
@@ -206,12 +297,48 @@ class Host:
             return set()
         return {int(pid) for path in CGROUP.rglob('cgroup.procs') for pid in path.read_text().split()}
 
+    def foundry_pids(self):
+        pids = set()
+        try:
+            processes = list(PROC.iterdir())
+        except OSError as exc:
+            raise Failure('Cannot enumerate host processes') from exc
+        for process in processes:
+            if not process.name.isdecimal() or int(process.name) == os.getpid():
+                continue
+            try:
+                state, flags, started = process_identity(process)
+                # Zombies have exited; PF_KTHREAD identifies kernel-only tasks.
+                if state in {'Z', 'X', 'x'} or flags & 0x00200000:
+                    continue
+                args = [os.fsdecode(arg) for arg in (process / 'cmdline').read_bytes().rstrip(b'\0').split(b'\0')]
+                if not args[0]:
+                    raise ValueError('Empty live userspace command line')
+                cwd = Path(os.readlink(process / 'cwd'))
+                executable = Path(os.readlink(process / 'exe'))
+                if not cwd.is_absolute() or not executable.is_absolute():
+                    raise ValueError('Invalid process path')
+                if process_identity(process)[2] != started:
+                    raise ValueError('Process identity changed during inspection')
+            except (OSError, ValueError, IndexError) as exc:
+                try:
+                    process.stat()
+                except FileNotFoundError:
+                    continue
+                except OSError:
+                    pass
+                raise Failure(f'Cannot inspect live process {process.name}; reconcile before proceeding') from exc
+            if uses_foundry_paths(args, cwd, executable):
+                pids.add(int(process.name))
+        return pids
+
     def stopped(self):
         state = self.state()
         if (state['ActiveState'] != 'inactive' or state['SubState'] != 'dead'
                 or state['Result'] != 'success' or state['MainPID'] != '0'
-                or state['ControlPID'] != '0' or self.cgroup_pids() or self.listeners()):
-            raise Failure('Shutdown is not verified: inspect unit result, cgroup and port 30000; do not back up or stop EC2')
+                or state['ControlPID'] != '0' or self.cgroup_pids() or self.listeners()
+                or self.foundry_pids()):
+            raise Failure('Shutdown is not verified: inspect unit result, cgroup, host processes and port 30000; do not back up or stop EC2')
 
     def ready(self):
         self.mount()
@@ -221,7 +348,8 @@ class Host:
         if (state['ActiveState'] != 'active' or state['SubState'] != 'running'
                 or state['Result'] != 'success' or pid <= 0 or state['ControlPID'] != '0'
                 or state['ControlGroup'] != '/system.slice/foundry.service'
-                or self.cgroup_pids() != {pid} or self.listeners() != {pid}):
+                or self.cgroup_pids() != {pid} or self.listeners() != {pid}
+                or self.foundry_pids() - {pid}):
             raise Failure('Foundry is not the single managed listener')
         process = PROC / str(pid)
         expected_args = ['/usr/bin/node', str(APP / 'main.js'),
@@ -259,9 +387,12 @@ class Host:
         if any(key.endswith('_hook') and val.strip()
                for section in config.values() for key, val in section.items()):
             raise Failure('Remove reviewed legacy Certbot hooks before adoption')
-        run(['/usr/bin/certbot', '--config', '/etc/foundry/certbot.ini', 'renew',
-             '--cert-name', HOSTNAME, '--non-interactive', '--no-random-sleep-on-renew',
-             '--no-directory-hooks'], timeout=180)
+        try:
+            run(['/usr/bin/certbot', '--config', '/etc/foundry/certbot.ini', 'renew',
+                 '--cert-name', HOSTNAME, '--non-interactive', '--no-random-sleep-on-renew',
+                 '--no-directory-hooks'], timeout=180)
+        except Failure as exc:
+            raise RenewalUnavailable(str(exc)) from exc
         self.certificate(LINEAGE)
 
     def publish_certificate(self):
@@ -285,8 +416,8 @@ class Host:
     def preflight(self):
         self.inputs()
         self.unit_contract()
-        if self.listeners() or self.cgroup_pids() - {os.getpid()}:
-            raise Failure('Refusing duplicate startup: listener or previous service process exists')
+        if self.listeners() or self.cgroup_pids() - {os.getpid()} or self.foundry_pids():
+            raise Failure('Refusing duplicate startup: listener or previous Foundry process exists')
         deadline = time.monotonic() + 60
         while run(['/usr/bin/timedatectl', 'show', '--property=NTPSynchronized', '--value'], timeout=5) != 'yes':
             if time.monotonic() >= deadline:
@@ -295,7 +426,7 @@ class Host:
         with locked(CERT_LOCK, wait=200):
             try:
                 self.renew()
-            except Failure as exc:
+            except RenewalUnavailable as exc:
                 # HTTP-01 can fail temporarily. An independently verified active pair
                 # remains usable; missing/expired/untrusted pairs still block startup.
                 print(f'Certificate renewal failed: {exc}', file=sys.stderr)
@@ -306,10 +437,11 @@ class Host:
             run(['/usr/sbin/runuser', '-u', 'foundry', '--', '/usr/bin/test', '-r',
                  str(TLS / 'current' / name)])
         self.mount()
-        if self.listeners():
-            raise Failure('Port 30000 became occupied during preflight')
+        if self.listeners() or self.cgroup_pids() - {os.getpid()} or self.foundry_pids():
+            raise Failure('Port 30000 became occupied or a Foundry process appeared during preflight')
 
     def start(self):
+        self.unit_contract()
         state = self.state()
         if state['ActiveState'] == 'active':
             self.ready()
