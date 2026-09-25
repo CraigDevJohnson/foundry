@@ -272,8 +272,10 @@ workflow, prove retrieval by recorded version ID, hold **ON** on the exact
 session versions in Oregon and Ohio, ordinary delete-marker control, and the
 restricted oldest-version pruning path. Exercise the failed Ohio copy or hold
 path, including 24-hour/next-session escalation and partial-prune
-reconciliation. Keep a session backup for each of the latest three distinct
-completed sessions, 30-day scheduled recovery points,
+reconciliation. Count scheduled points only after proving the writer was
+stopped or quiesced and the recovery input set is complete; defer/alert when
+due during active play or preparation. Keep a session backup for each of the
+latest three distinct completed sessions, 30-day scheduled recovery points,
 and all unreleased pre-upgrade copies under the agreed recovery policy.
 Require a costed, explicitly approved plan before changing live backup
 resources. Prove a full isolated Ohio restore before relying on the revised

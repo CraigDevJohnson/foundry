@@ -50,8 +50,9 @@ captured during End session, preserving the completed play or preparation work.
 _Avoid_: World backup (when the copy covers the installation rather than one world)
 
 **Scheduled recovery point**:
-A periodic recovery copy captured independently of End session. It does not
-count as a session backup even if it contains completed session state.
+A periodic recovery copy triggered independently of End session, subject to
+application-consistent capture. It does not count as a session backup even if it
+contains completed session state.
 
 **Pre-upgrade backup**:
 A recovery copy captured before an upgrade and retained until the operator

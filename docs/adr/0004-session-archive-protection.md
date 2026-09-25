@@ -49,6 +49,15 @@ design on 2026-09-24. No AWS execution was authorized.
   session archive bucket in the scheduled AWS Backup S3 selection or remove the
   vault lock as the routine rotation mechanism. Keep unreleased pre-upgrade
   copies outside the three-session cap.
+- Count a scheduled recovery point as usable only after proving the Foundry
+  writer was stopped or quiesced and all required volumes, Data/Config, and
+  reconstruction inputs were captured consistently. Do not interrupt active
+  play or preparation automatically for the schedule. If a capture becomes due
+  during a session, defer it, record the coverage gap, and retry after End
+  session; alert and return for a decision if the accepted freshness target is
+  at risk. A successful AWS Backup job or copy of a running writer is not proof
+  of usable application recovery. Measure freshness from the latest qualified,
+  usable Ohio point by source-capture time, not from a scheduled job's status.
 - Permit a temporary fourth session archive during replacement. Only after the
   new archive, its Ohio copy, their integrity, and hold **ON** on the exact
   versions in both Regions are verified may a narrowly authorized management

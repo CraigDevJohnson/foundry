@@ -38,9 +38,10 @@ through the design interview on 2026-09-08.
 - If End session cannot confirm a successful backup, keep the host running,
   report the failure, and require a successful retry before normal shutdown.
 - Retain successful session backups for the latest three distinct completed
-  sessions in Oregon and Ohio, alongside 30-day scheduled recovery points in
-  both Regions. Keep pre-upgrade backups until the operator explicitly releases
-  them. A fourth copy may exist during replacement verification. If verification
+  sessions in Oregon and Ohio, alongside 30-day history of
+  application-consistent scheduled recovery points in both Regions. Keep
+  pre-upgrade backups until the operator explicitly releases them. A fourth
+  copy may exist during replacement verification. If verification
   fails, retain it with the prior three, then alert and retry. If unresolved
   within 24 hours of failure or before the next session, whichever comes first,
   return to Craig.

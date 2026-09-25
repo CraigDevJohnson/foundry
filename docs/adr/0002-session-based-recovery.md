@@ -29,6 +29,10 @@ count toward the three-session cap. Retain pre-upgrade backups outside the
 three-session cap until the operator explicitly releases them. The
 [session archive protection exception](0004-session-archive-protection.md)
 records why this series uses different protection from scheduled backups.
+Scheduled points count as usable history only when the application writer is
+stopped or quiesced and complete reconstruction inputs are captured. Defer a
+due capture during active play/preparation rather than interrupting it
+automatically; record and alert on any freshness gap.
 
 If replacement verification fails, retain the prior three and pending fourth,
 then alert and retry. If unresolved within 24 hours of failure or before the

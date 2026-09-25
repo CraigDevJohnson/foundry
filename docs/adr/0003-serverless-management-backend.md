@@ -80,7 +80,11 @@ must remain isolated from players. The
 not a price for the revised recovery design. Additional held backups, growing
 world data, retained object versions, logs, or longer drills increase cost.
 
-Craig accepted this architecture on 2026-09-08. Implementation and live adoption
+Craig accepted the serverless management backend architecture on 2026-09-08.
+He separately accepted the three-session archive and legal-hold protection
+exception on 2026-09-24 in the
+[Issue #12 supplement](https://github.com/CraigDevJohnson/aws-setup/issues/12#issuecomment-5824745778).
+Neither decision authorizes AWS execution. Implementation and live adoption
 remain subject to the first-release specification and its verification gates.
 
 ## Sources
