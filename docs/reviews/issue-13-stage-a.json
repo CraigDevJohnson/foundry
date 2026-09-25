@@ -1,0 +1,309 @@
+{
+  "schema_version": 1,
+  "feature": "Issue #13 Stage A: Foundry trial permissions-boundary bootstrap",
+  "owner": "CraigDevJohnson/foundry",
+  "baseline_commit": "207d57c1148e0744da2bca660a16b7d43262ef71",
+  "baseline_register": "https://github.com/CraigDevJohnson/aws-setup/blob/207d57c1148e0744da2bca660a16b7d43262ef71/docs/planning/initial-baseline-controls.md",
+  "reviewed_at": "2026-09-25T10:03:07+00:00",
+  "execution_status": "not-authorized",
+  "scope": {
+    "accounts": ["180294223248"],
+    "regions": ["global", "us-west-2", "us-east-2"],
+    "resources": ["arn:aws:iam::180294223248:policy/foundry-bm-i13-20260924-AWSBackup-boundary", "/Users/craigjohnson/.local/share/foundry/issue-13-measurement/state/terraform.tfstate"]
+  },
+  "methods": {
+    "source-review": {
+      "tool": "Source review",
+      "version": "Stage A v1 candidate, 2026-09-25",
+      "method": "Compare owner-local source and the Stage A envelope with the adopted register. This is a design review, not live control proof."
+    },
+    "iac-static": {
+      "tool": "Terraform",
+      "version": "1.16.4; hashicorp/aws 6.37.0",
+      "method": "Offline format, configuration validation, and source policy review. Saved live plans and deployed permissions remain pending."
+    },
+    "metadata": {
+      "tool": "AWS CLI",
+      "version": "2.37.2",
+      "method": "Parent execution-proposal preflight, 2026-09-24/25. Metadata only. The existing root audit is not proof of working replacement access."
+    },
+    "completeness": {
+      "tool": "scripts/check_feature_review.py",
+      "version": "schema 1; Python 3.9+ standard library",
+      "method": "Check the pinned control ID set, fields, local evidence paths, method and exception references. Does not contact AWS or approve execution."
+    }
+  },
+  "exception_references": {
+    "LOG-DET-PREMEASUREMENT": {
+      "owner": "CraigDevJohnson/aws-setup",
+      "owner_record": "CraigDevJohnson/aws-setup:docs/planning/issue-13-bootstrap-execution-proposal.md#cost-and-exception-boundaries; resolve at the paired source revision in the execution approval",
+      "approval_reference": "Craig accepted the timing exception in this task: 1. Yes, 2. Yes, 3. Seven days; recorded in CraigDevJohnson/aws-setup:docs/planning/issue-13-interview-decisions.md#accepted-planning-choices",
+      "execution_reference": "CraigDevJohnson/aws-setup:docs/planning/issue-13-bootstrap-execution-proposal.md#approval-record; execution approval is pending",
+      "status": "planning-accepted-execution-pending",
+      "review_trigger": "Stage A proposes an outer limit of 30 elapsed days from its first AWS mutation, ending earlier on verified LOG-01 and DET-01. The duration is pending execution approval; no start or deadline is active."
+    }
+  },
+  "controls": [
+    {
+      "id": "FND-01",
+      "owner": "CraigDevJohnson/foundry",
+      "status": "not-tested",
+      "scope": {
+        "accounts": ["180294223248"],
+        "regions": ["us-west-2", "us-east-2"],
+        "resources": ["arn:aws:iam::180294223248:policy/foundry-bm-i13-20260924-AWSBackup-boundary", "/Users/craigjohnson/.local/share/foundry/issue-13-measurement/state/terraform.tfstate"]
+      },
+      "observed_at": null,
+      "assessment": "Foundry owns the one boundary and its isolated local state. The foundation backend is not used. Craig accepted a FileVault state copy and checksummed checkpoint on the same disk for this disposable trial.",
+      "method_refs": ["source-review"],
+      "evidence": ["infra/trials/backup-measurement/README.md"],
+      "coverage_gaps": ["No boundary exists or state checkpoint is verified. Disk loss can destroy both copies and require reviewed manual inventory/import or cleanup. Application state remains separate from foundation state."],
+      "exception_refs": []
+    },
+    {
+      "id": "IAM-01",
+      "owner": "CraigDevJohnson/foundry",
+      "status": "not-tested",
+      "scope": {
+        "accounts": ["180294223248"],
+        "regions": ["global"],
+        "resources": ["arn:aws:iam::180294223248:policy/foundry-bm-i13-20260924-AWSBackup-boundary"]
+      },
+      "observed_at": null,
+      "assessment": "Stage A targets only the pre-reviewed maximum-permissions boundary through the isolated temporary root session. The trial operator cannot create or edit its own boundary.",
+      "method_refs": ["source-review", "iac-static"],
+      "evidence": ["infra/trials/backup-measurement/README.md", "infra/trials/backup-measurement/iam.tf"],
+      "coverage_gaps": ["The live boundary/default version, root source guard, and later effective service-role permissions remain unverified. No trial role or assignment is created in this stage."],
+      "exception_refs": []
+    },
+    {
+      "id": "IAM-02",
+      "owner": "CraigDevJohnson/foundry",
+      "status": "fail",
+      "scope": {
+        "accounts": ["180294223248"],
+        "regions": ["global"],
+        "resources": ["arn:aws:iam::180294223248:root"]
+      },
+      "observed_at": "2026-09-25T09:56:00Z",
+      "assessment": "Foundation preflight found an active management root key. The Stage A boundary uses the isolated login path; no IAM-02 exception was selected, and trial jobs wait for key remediation.",
+      "method_refs": ["source-review", "metadata"],
+      "evidence": ["infra/trials/backup-measurement/README.md"],
+      "coverage_gaps": ["This owner relies on the paired aws-setup root retirement evidence. Foundry does not own the credential migration, observation, or deletion."],
+      "exception_refs": []
+    },
+    {
+      "id": "ORG-01",
+      "owner": "CraigDevJohnson/foundry",
+      "status": "not-applicable",
+      "scope": {
+        "accounts": ["180294223248"],
+        "regions": ["global"],
+        "resources": ["Organization/SCPs: unchanged"]
+      },
+      "observed_at": null,
+      "assessment": "The boundary-only stage changes no member account, membership, or SCP.",
+      "method_refs": ["source-review"],
+      "evidence": ["infra/trials/backup-measurement/README.md"],
+      "coverage_gaps": [],
+      "exception_refs": [],
+      "not_applicable_reason": "The boundary-only stage changes no member account, membership, or SCP."
+    },
+    {
+      "id": "PUB-01",
+      "owner": "CraigDevJohnson/foundry",
+      "status": "not-applicable",
+      "scope": {
+        "accounts": ["180294223248"],
+        "regions": ["global", "us-east-2"],
+        "resources": ["S3 buckets and endpoints: unchanged"]
+      },
+      "observed_at": null,
+      "assessment": "The boundary-only stage creates no S3 bucket or endpoint and changes no public-access setting.",
+      "method_refs": ["source-review"],
+      "evidence": ["infra/trials/backup-measurement/README.md"],
+      "coverage_gaps": [],
+      "exception_refs": [],
+      "not_applicable_reason": "The boundary-only stage creates no S3 bucket or endpoint and changes no public-access setting."
+    },
+    {
+      "id": "PUB-02",
+      "owner": "CraigDevJohnson/foundry",
+      "status": "not-applicable",
+      "scope": {
+        "accounts": ["180294223248"],
+        "regions": ["us-west-2", "us-east-2"],
+        "resources": ["AMIs/snapshots and administrative ingress: unchanged"]
+      },
+      "observed_at": null,
+      "assessment": "The boundary-only stage creates no AMI, snapshot, host, security group, or sharing setting.",
+      "method_refs": ["source-review"],
+      "evidence": ["infra/trials/backup-measurement/README.md"],
+      "coverage_gaps": [],
+      "exception_refs": [],
+      "not_applicable_reason": "The boundary-only stage creates no AMI, snapshot, host, security group, or sharing setting."
+    },
+    {
+      "id": "ENC-01",
+      "owner": "CraigDevJohnson/foundry",
+      "status": "not-tested",
+      "scope": {
+        "accounts": ["180294223248"],
+        "regions": ["us-west-2", "us-east-2"],
+        "resources": ["arn:aws:iam::180294223248:policy/foundry-bm-i13-20260924-AWSBackup-boundary", "/Users/craigjohnson/.local/share/foundry/issue-13-measurement/state/terraform.tfstate"]
+      },
+      "observed_at": null,
+      "assessment": "The boundary names the reviewed regional EBS keys and a read-only Backup-key lookup. Foundry local state/checkpoints use the accepted FileVault path.",
+      "method_refs": ["source-review", "iac-static"],
+      "evidence": ["infra/trials/backup-measurement/README.md", "infra/trials/backup-measurement/iam.tf"],
+      "coverage_gaps": ["Actual FileVault protection and future copy/decrypt behavior are not proved by the boundary. No encrypted backup is created in Stage A."],
+      "exception_refs": []
+    },
+    {
+      "id": "LOG-01",
+      "owner": "CraigDevJohnson/foundry",
+      "status": "fail",
+      "scope": {
+        "accounts": ["180294223248"],
+        "regions": ["us-west-2", "us-east-2"],
+        "resources": ["arn:aws:iam::180294223248:policy/foundry-bm-i13-20260924-AWSBackup-boundary", "Management organization trail: absent"]
+      },
+      "observed_at": null,
+      "assessment": "The paired foundation preflight reports absent organization CloudTrail coverage. Foundry inherits the foundation-owned timing exception for this stage.",
+      "method_refs": ["source-review", "metadata"],
+      "evidence": ["infra/trials/backup-measurement/README.md"],
+      "coverage_gaps": ["The paired aws-setup decision record and Stage A exception define this gap. Foundry has no independent trail or delivered audit evidence.", "The source reports the observation date as 2026-09-24; an exact collection timestamp is unavailable in this sanitized review."],
+      "exception_refs": ["LOG-DET-PREMEASUREMENT"]
+    },
+    {
+      "id": "LOG-02",
+      "owner": "CraigDevJohnson/foundry",
+      "status": "not-applicable",
+      "scope": {
+        "accounts": ["180294223248"],
+        "regions": ["us-west-2", "us-east-2"],
+        "resources": ["Routine operating log stores: unchanged"]
+      },
+      "observed_at": null,
+      "assessment": "The boundary-only stage creates no operating-log store and changes no existing retention.",
+      "method_refs": ["source-review"],
+      "evidence": ["infra/trials/backup-measurement/README.md"],
+      "coverage_gaps": [],
+      "exception_refs": [],
+      "not_applicable_reason": "The boundary-only stage creates no operating-log store and changes no existing retention."
+    },
+    {
+      "id": "OPS-01",
+      "owner": "CraigDevJohnson/foundry",
+      "status": "not-tested",
+      "scope": {
+        "accounts": ["180294223248"],
+        "regions": ["us-west-2", "us-east-2"],
+        "resources": ["arn:aws:iam::180294223248:policy/foundry-bm-i13-20260924-AWSBackup-boundary"]
+      },
+      "observed_at": null,
+      "assessment": "Stage A requires a stop on unexpected plan actions or policy differences and parent operation read-back. Full alerts belong to later stages.",
+      "method_refs": ["source-review"],
+      "evidence": ["infra/trials/backup-measurement/README.md"],
+      "coverage_gaps": ["Email routes, copy-failure alerts, and inbox delivery are untested. No running copy or backup job is present to exercise."],
+      "exception_refs": []
+    },
+    {
+      "id": "REC-01",
+      "owner": "CraigDevJohnson/foundry",
+      "status": "not-tested",
+      "scope": {
+        "accounts": ["180294223248"],
+        "regions": ["us-west-2", "us-east-2"],
+        "resources": ["arn:aws:iam::180294223248:policy/foundry-bm-i13-20260924-AWSBackup-boundary", "/Users/craigjohnson/.local/share/foundry/issue-13-measurement/state/terraform.tfstate"]
+      },
+      "observed_at": null,
+      "assessment": "Foundry state remains owner-local with the accepted same-disk checkpoint risk. The trial does not restore the application.",
+      "method_refs": ["source-review"],
+      "evidence": ["infra/trials/backup-measurement/README.md"],
+      "coverage_gaps": ["Checkpoint recovery and manual disk-loss fallback are untested. No evidence establishes the workload 24-hour loss or restore objectives."],
+      "exception_refs": []
+    },
+    {
+      "id": "REC-02",
+      "owner": "CraigDevJohnson/foundry",
+      "status": "not-applicable",
+      "scope": {
+        "accounts": ["180294223248"],
+        "regions": ["us-west-2", "us-east-2"],
+        "resources": ["arn:aws:iam::180294223248:policy/foundry-bm-i13-20260924-AWSBackup-boundary"]
+      },
+      "observed_at": null,
+      "assessment": "Stage A creates only the boundary. Trial vaults, recovery points, scheduled history, legal-hold session archives, and pre-upgrade holds are outside this stage.",
+      "method_refs": ["source-review"],
+      "evidence": ["infra/trials/backup-measurement/README.md"],
+      "coverage_gaps": [],
+      "exception_refs": [],
+      "not_applicable_reason": "Stage A creates only the boundary. Trial vaults, recovery points, scheduled history, legal-hold session archives, and pre-upgrade holds are outside this stage."
+    },
+    {
+      "id": "DET-01",
+      "owner": "CraigDevJohnson/foundry",
+      "status": "fail",
+      "scope": {
+        "accounts": ["180294223248"],
+        "regions": ["us-west-2", "us-east-2"],
+        "resources": ["arn:aws:iam::180294223248:policy/foundry-bm-i13-20260924-AWSBackup-boundary", "Management GuardDuty detectors: absent"]
+      },
+      "observed_at": null,
+      "assessment": "The paired foundation preflight reports absent GuardDuty detection. Foundry inherits the foundation-owned timing exception.",
+      "method_refs": ["source-review", "metadata"],
+      "evidence": ["infra/trials/backup-measurement/README.md"],
+      "coverage_gaps": ["Detector features, analyzed activity, and finding delivery remain a later foundation obligation.", "The source reports the observation date as 2026-09-24; an exact collection timestamp is unavailable in this sanitized review."],
+      "exception_refs": ["LOG-DET-PREMEASUREMENT"]
+    },
+    {
+      "id": "EVD-01",
+      "owner": "CraigDevJohnson/foundry",
+      "status": "not-tested",
+      "scope": {
+        "accounts": ["180294223248"],
+        "regions": ["us-west-2", "us-east-2"],
+        "resources": ["arn:aws:iam::180294223248:policy/foundry-bm-i13-20260924-AWSBackup-boundary", "/Users/craigjohnson/.local/share/foundry/issue-13-measurement/state/terraform.tfstate"]
+      },
+      "observed_at": null,
+      "assessment": "This owner-local review cites the adopted register and the same stage as the paired execution proposal. The offline checker validates completeness only.",
+      "method_refs": ["source-review", "completeness"],
+      "evidence": ["infra/trials/backup-measurement/README.md", "scripts/check_feature_review.py"],
+      "coverage_gaps": ["No AWS execution evidence exists. Approval must identify both source revisions and preserve Foundry state/evidence separately."],
+      "exception_refs": []
+    },
+    {
+      "id": "EVD-02",
+      "owner": "CraigDevJohnson/foundry",
+      "status": "not-tested",
+      "scope": {
+        "accounts": ["180294223248"],
+        "regions": ["us-west-2", "us-east-2"],
+        "resources": ["arn:aws:iam::180294223248:policy/foundry-bm-i13-20260924-AWSBackup-boundary"]
+      },
+      "observed_at": null,
+      "assessment": "The boundary is available for basic policy validation and exact read-back. The README records earlier offline policy checks with their limits.",
+      "method_refs": ["source-review", "iac-static"],
+      "evidence": ["infra/trials/backup-measurement/README.md", "infra/trials/backup-measurement/iam.tf"],
+      "coverage_gaps": ["Static validation cannot establish live effective permissions, external analyzer coverage, or actual backup/copy access."],
+      "exception_refs": []
+    },
+    {
+      "id": "FIN-01",
+      "owner": "CraigDevJohnson/foundry",
+      "status": "not-tested",
+      "scope": {
+        "accounts": ["180294223248"],
+        "regions": ["global"],
+        "resources": ["arn:aws:iam::180294223248:policy/foundry-bm-i13-20260924-AWSBackup-boundary"]
+      },
+      "observed_at": null,
+      "assessment": "Creating the IAM boundary adds no separately priced standing service. The accepted $15 temporary backup sample is a later execution gate.",
+      "method_refs": ["source-review"],
+      "evidence": ["infra/trials/backup-measurement/README.md"],
+      "coverage_gaps": ["This stage observes no backup cost or changed-block sample and does not satisfy the foundation budget/notification proof."],
+      "exception_refs": []
+    }
+  ]
+}
