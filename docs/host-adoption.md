@@ -140,18 +140,18 @@ that no other Foundry process exists.
 5. Edit the preserved installation's
    `/foundry/foundrydata/Config/options.json` to set `sslCert` to
    `/etc/foundry/tls/current/fullchain.pem` and `sslKey` to
-   `/etc/foundry/tls/current/privkey.pem`. Set `port` to `30000` and `hostname` to
-   `foundry.craigdevjohnson.com`. Preserve every unrelated option and the exact
+   `/etc/foundry/tls/current/privkey.pem`. Set `port` to `30000` and `hostname`
+   to `foundry.craigdevjohnson.com`. Preserve every unrelated option and the exact
    original file for rollback. The lifecycle does not repair this file at
    startup or supply undocumented certificate command-line overrides.
 6. Review the existing Certbot lineage and authenticator against the host
    contract. Require the fixed `foundry.craigdevjohnson.com` lineage to use the
    `standalone` authenticator. Preserve and remove every configured lineage
    hook; the lifecycle rejects any nonempty hook. Require no installer plugin;
-   an installer can reload another service even when hooks are disabled. Use the rendered
-   `/etc/foundry/certbot.ini` so that global Certbot configuration does not add
-   hooks. The command also disables directory hooks. Confirm that the approved
-   HTTP-01 challenge can reach port `80` while Foundry is stopped. Leave
+   an installer can reload another service even when hooks are disabled. Use
+   the rendered `/etc/foundry/certbot.ini` so global Certbot configuration does
+   not add hooks. The command also disables directory hooks. Confirm that the
+   approved HTTP-01 challenge can reach port `80` while Foundry is stopped. Leave
    certificate staging to `foundry-host`; it validates the material before
    switching `/etc/foundry/tls/current`.
 7. Disable the inventoried competing launch and renewal paths after preserving
@@ -251,8 +251,9 @@ running; inspect `status` before taking another action.
   simulated period offline. Verify that startup checks the clock, mount and
   listener, attempts targeted renewal, stages valid certificate material, and
   confirms that `foundry` can read both staged files before starting Node.
-  Verify that it reaches HTTPS readiness. Test renewal failure with a still-valid certificate,
-  then expired, wrong-name, mismatched-key and malformed certificate material.
+  Verify that it reaches HTTPS readiness. Test renewal failure with a
+  still-valid certificate, then expired, wrong-name, mismatched-key and malformed
+  certificate material.
   Verify that unsafe lineage configuration blocks startup even with a valid
   current certificate.
   With no usable certificate, Foundry must remain unstarted.
@@ -266,8 +267,17 @@ After the backup workflow and management integration pass their own acceptance
 checks, execute the authorized End session/Start session cycle from issue #10.
 Verify a complete durable backup before EC2 stop, actual EC2 stopped/running
 states, mount identity after boot, renewal handling, one managed listener,
-HTTPS readiness, and both usable worlds. Keep the latest 10 successful session
-backups and all unreleased pre-upgrade copies under the agreed recovery policy.
+HTTPS readiness, and both usable worlds. Before relying on the session archive
+workflow, prove retrieval by recorded version ID, hold **ON** on the exact
+session versions in Oregon and Ohio, ordinary delete-marker control, and the
+restricted oldest-version pruning path. Exercise the failed Ohio copy or hold
+path, including 24-hour/next-session escalation and partial-prune
+reconciliation. Keep a session backup for each of the latest three distinct
+completed sessions, 30-day scheduled recovery points,
+and all unreleased pre-upgrade copies under the agreed recovery policy.
+Require a costed, explicitly approved plan before changing live backup
+resources. Prove a full isolated Ohio restore before relying on the revised
+recovery path.
 Do not use a direct EC2 stop as a substitute for End session.
 
 ## Roll back without introducing a second writer

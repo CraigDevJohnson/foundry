@@ -36,7 +36,10 @@ flowchart LR
   retrying; an expired lease alone does not prove an earlier operation stopped.
 - Private S3 storage holds complete recovery sets with integrity checks and
   software/setup metadata. The host may upload backups but may not delete
-  retained recovery points; retention belongs to the management plane.
+  retained recovery points; retention belongs to the management plane. The
+  dedicated session series follows the
+  [legal-hold exception](0004-session-archive-protection.md), while scheduled
+  recovery points remain in governance-locked AWS Backup vaults.
 - Terraform defines the host, service dependencies, controller, runbooks, roles,
   storage, and operation records. Its state and recovery secrets require private
   storage and must remain outside Git and job output.
@@ -58,23 +61,24 @@ isolated EC2 instance and its volumes. There is no requirement for another
 always-running server, public API, NAT gateway, or load balancer. A costed
 resource plan and an adoption/rollback procedure are required before deployment.
 
-For planning, 10 session backups plus two held pre-upgrade copies at 2.5 GiB
-each would retain 30 GiB, costing approximately $0.69/month in S3 Standard.
-Forty workflows with 10 initiated native Automation steps each would add
-$0.80/month. This $1.49 subtotal excludes requests, operation metadata, Lambda,
-logs, and restore drills. A provisional $2–$5/month incremental allowance is
-reasonable for this example; it is a recommendation, not an agreed cap or a
-guaranteed bill. See the
-[Oregon S3 price list](https://pricing.us-east-1.amazonaws.com/offers/v1.0/aws/AmazonS3/current/us-west-2/index.csv)
-and [Automation pricing](https://aws.amazon.com/systems-manager/pricing/).
+At an illustrative 2.5 GiB per complete recovery set, three session backups
+in two Regions require 15 GiB before a temporary fourth copy, retained object
+versions, pre-upgrade copies, and ordinary 30-day scheduled recovery points.
+The earlier 10-session, single-Region storage example is superseded; no revised
+dollar total or spending cap is adopted. Before deployment, itemize measured
+backup size and frequency, storage in both Regions, copy and request charges,
+encryption, operation records, Automation, Lambda, logs, held versions, and
+isolated restore drills. Use current
+[S3](https://aws.amazon.com/s3/pricing/),
+[AWS Backup](https://aws.amazon.com/backup/pricing/), and
+[Automation](https://aws.amazon.com/systems-manager/pricing/) prices.
 
-A four-hour drill with one `t4g.small`, 30 GiB baseline gp3, and one public IPv4
-would cost about $0.10 for those resources if they stop accruing charges after
-four hours, plus workflow and request costs. This is a resource-cost example;
-the restore target must remain isolated from players. Rates are recorded in the
-[hosting baseline](../hosting-baseline.md). Additional held backups, growing
-world data, retained object versions, logs, or longer drills increase cost;
-these examples use no free-tier credit.
+An isolated drill also consumes temporary instance, volume, and public IPv4
+resources for its duration, plus workflow and request costs; the restore target
+must remain isolated from players. The
+[hosting baseline](../hosting-baseline.md) records the existing host footprint,
+not a price for the revised recovery design. Additional held backups, growing
+world data, retained object versions, logs, or longer drills increase cost.
 
 Craig accepted this architecture on 2026-09-08. Implementation and live adoption
 remain subject to the first-release specification and its verification gates.
