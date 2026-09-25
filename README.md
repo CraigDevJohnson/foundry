@@ -37,8 +37,14 @@ through the design interview on 2026-09-08.
   End session or a service restart. Automatic player detection is not required.
 - If End session cannot confirm a successful backup, keep the host running,
   report the failure, and require a successful retry before normal shutdown.
-- Retain the latest 10 successful session backups, plus pre-upgrade backups
-  until the operator explicitly releases them.
+- Retain successful session backups for the latest three distinct completed
+  sessions in Oregon and Ohio, alongside 30-day history of
+  application-consistent scheduled recovery points in both Regions. Keep
+  pre-upgrade backups until the operator explicitly releases them. A fourth
+  copy may exist during replacement verification. If verification
+  fails, retain it with the prior three, then alert and retry. If unresolved
+  within 24 hours of failure or before the next session, whichever comes first,
+  return to Craig.
 - Check every backup's integrity. Prove recovery through an actual isolated
   restore before first use, after relevant backup/recovery or infrastructure
   changes, and quarterly; include temporary recovery resources in the cost
@@ -67,6 +73,8 @@ management plane is relied upon.
   records the management boundary.
 - [Session-based recovery](docs/adr/0002-session-based-recovery.md) records the
   availability and recovery trade-off.
+- [Session archive protection](docs/adr/0004-session-archive-protection.md)
+  records the scoped legal-hold exception for the three-session series.
 - [Backend architecture](docs/adr/0003-serverless-management-backend.md) records
   the accepted Go Lambda and Systems Manager implementation direction.
 - [Status API](docs/status-api.md) documents the first read-only backend slice.

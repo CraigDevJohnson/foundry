@@ -20,8 +20,27 @@ interrupted before End session or a service restart. If the session backup
 fails or its success cannot be confirmed, the host remains running and normal
 shutdown is blocked until a successful retry.
 
-Retain the latest 10 successful session backups and retain pre-upgrade backups
-until the operator explicitly releases them. Check integrity for every backup
-and conduct an isolated restore drill before first use, after relevant recovery
-or infrastructure changes, and quarterly. Temporary recovery resources belong
-in the cost estimate; an integrity check alone is not proof of restoration.
+Retain a successful session backup for each of the latest three distinct
+completed sessions as a dedicated session-end series. A replacement may briefly
+make four while its Ohio copy and protection are verified. After verification,
+remove the oldest exact versions in both Regions. Keep scheduled recovery points
+for 30 days in Oregon and Ohio. They may contain older session state but do not
+count toward the three-session cap. Retain pre-upgrade backups outside the
+three-session cap until the operator explicitly releases them. The
+[session archive protection exception](0004-session-archive-protection.md)
+records why this series uses different protection from scheduled backups.
+Scheduled points count as usable history only when the application writer is
+stopped or quiesced and complete reconstruction inputs are captured. Defer a
+due capture during active play/preparation rather than interrupting it
+automatically; record and alert on any freshness gap.
+
+If replacement verification fails, retain the prior three and pending fourth,
+then alert and retry. If unresolved within 24 hours of failure or before the
+next session, whichever occurs first, return to Craig for a decision.
+
+End session may stop the host after a complete, verified Oregon backup. Until
+its Ohio copy is usable, report regional protection as pending and alert on a
+copy failure. Check integrity for every backup and conduct an isolated restore
+drill before first use, after relevant recovery or infrastructure changes, and
+quarterly. Temporary recovery resources belong in the cost estimate; an
+integrity check alone is not proof of restoration.
