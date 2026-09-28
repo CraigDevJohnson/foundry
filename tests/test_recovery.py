@@ -173,11 +173,13 @@ class RecoveryTest(unittest.TestCase):
         (assets / 'map').write_bytes(b'synthetic external map')
         self.inventory['external_assets'] = [str(assets)]
         (self.roots['data'] / 'Data/map').symlink_to(assets / 'map')
+        (self.roots['data'] / 'Data/external-directory').symlink_to(assets, target_is_directory=True)
         checksum = self.capture()
         restored = self.root / 'isolated'
         recovery.materialize(self.output, checksum, restored)
         self.assertEqual((restored / 'data/Data/map').read_bytes(), b'synthetic external map')
         self.assertEqual((restored / 'data/Data/map').resolve(), restored / 'external-0/map')
+        self.assertEqual((restored / 'data/Data/external-directory/map').read_bytes(), b'synthetic external map')
 
     def test_missing_or_unpinned_artifact_fails_before_stopping(self):
         Path(self.inventory['node_archive']).write_bytes(b'wrong archive')
@@ -331,6 +333,46 @@ class RecoveryTest(unittest.TestCase):
                 recovery.materialize(self.output, bad, self.root / 'isolated')
             self.assertFalse((self.root / 'isolated').exists())
         self.assertFalse((self.root / 'escaped').exists())
+
+    def test_sibling_directory_symlink_cycle_cannot_complete_capture(self):
+        a = self.roots['data'] / 'Data/a'
+        b = self.roots['data'] / 'Data/b'
+        a.mkdir()
+        b.mkdir()
+        (a / 'to-b').symlink_to('../b', target_is_directory=True)
+        (b / 'to-a').symlink_to('../a', target_is_directory=True)
+        with self.assertRaisesRegex(hostlib.Failure, 'cycle'):
+            self.capture()
+        self.assertFalse((self.output / 'COMPLETE').exists())
+
+    def test_sibling_directory_cycle_in_existing_set_cannot_verify_or_materialize(self):
+        for name in ('a', 'b'):
+            (self.roots['data'] / 'Data' / name).mkdir()
+        self.capture()
+
+        def add_cycle(value):
+            directory = next(e for e in value['entries'] if e['path'] == 'data/Data/a')
+            value['entries'].extend([
+                dict(directory, kind='symlink', path='data/Data/a/to-b', target='data/Data/b'),
+                dict(directory, kind='symlink', path='data/Data/b/to-a', target='data/Data/a'),
+            ])
+        checksum = self.rewrite(add_cycle)
+        with self.assertRaisesRegex(hostlib.Failure, 'cycle'):
+            recovery.verify(self.output, checksum)
+        with self.assertRaisesRegex(hostlib.Failure, 'cycle'):
+            recovery.materialize(self.output, checksum, self.root / 'isolated')
+        self.assertFalse((self.root / 'isolated').exists())
+
+    def test_noncyclic_directory_links_remain_supported(self):
+        for name in ('a', 'b', 'c'):
+            (self.roots['data'] / 'Data' / name).mkdir()
+        (self.roots['data'] / 'Data/a/to-b').symlink_to('../b', target_is_directory=True)
+        (self.roots['data'] / 'Data/b/to-c').symlink_to('../c', target_is_directory=True)
+        (self.roots['data'] / 'Data/c/map').write_bytes(b'synthetic map')
+        checksum = self.capture()
+        restored = self.root / 'isolated'
+        recovery.materialize(self.output, checksum, restored)
+        self.assertEqual((restored / 'data/Data/a/to-b/to-c/map').read_bytes(), b'synthetic map')
 
     def test_output_never_overwrites_existing_directory(self):
         self.output.mkdir()

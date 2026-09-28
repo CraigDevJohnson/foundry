@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Private local recovery sets. No AWS calls, installer, retention or host shutdown."""
 import argparse
+from collections import deque
 from datetime import datetime, timezone
 import hashlib
 import json
@@ -267,6 +268,30 @@ def capture(inventory, output, host, restart=False):
     return checksum
 
 
+def reject_link_cycles(indexed):
+    """Include directory children: individually safe links can still form a cycle."""
+    edges = {name: [] for name in indexed}
+    incoming = {name: 0 for name in indexed}
+    for name, entry in indexed.items():
+        parent = str(PurePosixPath(name).parent)
+        if parent != '.':
+            edges[parent].append(name)
+            incoming[name] += 1
+        if entry['kind'] == 'symlink':
+            edges[name].append(entry['target'])
+            incoming[entry['target']] += 1
+    ready = deque(name for name, count in incoming.items() if count == 0)
+    visited = 0
+    while ready:
+        name = ready.popleft()
+        visited += 1
+        for target in edges[name]:
+            incoming[target] -= 1
+            if incoming[target] == 0:
+                ready.append(target)
+    require(visited == len(indexed), 'Recovery directory links contain a cycle')
+
+
 def verify(directory, expected, completed=True):
     require(isinstance(expected, str) and DIGEST.fullmatch(expected), 'Expected manifest checksum is required')
     directory = source_path(str(Path(directory).absolute()))
@@ -330,6 +355,7 @@ def verify(directory, expected, completed=True):
             require(indexed.get(entry['target'], {}).get('kind') in {'file', 'directory'}
                     and target != link and target not in link.parents and link not in target.parents,
                     'Dangling, recursive or chained recovery symlink')
+    reject_link_cycles(indexed)
     for name in set(value['roots']) | {'setup_bundle', 'data/Data', 'data/Config', 'data/Backups',
                                       'data/Data/worlds', 'host/host.json'}:
         require(name in indexed, 'Required recovery coverage is absent')
