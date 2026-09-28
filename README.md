@@ -65,6 +65,9 @@ management plane is relied upon.
   and related management tools verified during discovery.
 - [Host lifecycle contract](docs/host-contract.md) defines the pinned inputs,
   filesystem paths, fixed commands, and offline checks for issue #5.
+- [Local recovery sets](docs/local-recovery-sets.md) describes the fixture-tested capture,
+  integrity verification and isolated materialization tools; cloud protection and
+  live restore remain pending.
 - [Host adoption and rollback](docs/host-adoption.md) records the separate
   authorized live procedure and remaining proof required before reliance.
 - [First-release specification](https://github.com/CraigDevJohnson/foundry/issues/2)
@@ -94,8 +97,10 @@ host contract before rendering a private installation tree. Rendering never
 installs files or contacts the host.
 
 The first implementation slice provides a Go Lambda status controller and a
-local read-only runner. It reports host, agent, and HTTPS observations; session
-mutations, backup/recovery tooling, infrastructure, and portfolio integration
+local read-only runner. It reports host, agent, and HTTPS observations. Local
+recovery-set capture/validation/materialization is now available for offline testing;
+cloud backups, session operations, live recovery, infrastructure and portfolio
+integration
 remain tracked in the [first-release backlog](https://github.com/CraigDevJohnson/foundry/issues/2).
 
 Use Go 1.27.1 or newer and run `make ci` for formatting, vet, race-enabled tests,
