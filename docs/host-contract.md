@@ -187,9 +187,11 @@ Foundry between those steps.
 The backup command must recheck the mount and stopped evidence immediately
 before reading Data and Config and preserve the manifest/setup/certificate
 reconstruction dependencies and inventoried external assets. Existing `Backups`
-and snapshots remain preserved independently. Logs, cache and transient files
-need an explicit coverage decision in issue #6. No backup or host shutdown is
-implemented here. An error must leave EC2 running; it does not necessarily mean
+and snapshots remain preserved. The [local recovery-set tools](local-recovery-sets.md)
+include logs, cache and transient files without exclusions and implement the
+lock-scoped local capture/validation/materialization portion of issue #6.
+Cloud protection and EC2 shutdown are not implemented by those tools. An error
+must leave EC2 running; it does not necessarily mean
 Foundry is still serving. Issue #7 owns admission across complete workflows and
 reconciliation after disconnected or timed-out callers.
 

@@ -1,0 +1,45 @@
+{
+  "schema": 1,
+  "external_assets": [],
+  "node_archive": null,
+  "foundry_archive": null,
+  "setup_checkout": null,
+  "recovery_ami": {
+    "region": "us-east-2",
+    "image_id": null
+  },
+  "rpm_archives": {
+    "python3": {
+      "path": null,
+      "sha256": null
+    },
+    "systemd": {
+      "path": null,
+      "sha256": null
+    },
+    "openssl": {
+      "path": null,
+      "sha256": null
+    },
+    "certbot": {
+      "path": null,
+      "sha256": null
+    },
+    "iproute": {
+      "path": null,
+      "sha256": null
+    },
+    "util-linux": {
+      "path": null,
+      "sha256": null
+    },
+    "curl": {
+      "path": null,
+      "sha256": null
+    },
+    "ca-certificates": {
+      "path": null,
+      "sha256": null
+    }
+  }
+}
