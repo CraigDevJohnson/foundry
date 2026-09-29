@@ -22,7 +22,7 @@ Region is us-west-2; otherwise add `--region us-west-2`.
 | Service | `foundry.service` runs `/usr/bin/node-24 /foundry/foundryvtt/main.js --dataPath=/foundry/foundrydata --port=30000` as `foundry`, with `Restart=on-failure`. `Config/options.json` launches the `blood-lords` world at start |
 
 A rebuild changes the instance and root volume IDs; `tofu -chdir=infra output`
-prints the current ones.
+prints the current ones (`host_instance_id` and `root_volume_id`).
 
 There is no key pair. Open a shell with Session Manager (needs the Session
 Manager plugin), or run commands with Run Command:
@@ -177,13 +177,28 @@ can't take its place.
 
    Check the world as GM, then delete `/foundry/<world>.before-restore`.
 
-5. Clean up:
+5. Clean up. Unmount, detach and delete the restore volume:
 
    ```sh
    sudo umount /mnt/restore
    aws ec2 detach-volume --profile workloads-admin --volume-id <volume id>
    aws ec2 wait volume-available --profile workloads-admin --volume-ids <volume id>
    aws ec2 delete-volume --profile workloads-admin --volume-id <volume id>
+   ```
+
+   The restore volume carries `project=foundry` (aws-design G10), the tag the
+   DLM policy selects volumes by. If the volume existed during a policy run
+   (daily from 10:00 UTC, weekly from Sunday 11:00 UTC, each starting within
+   an hour), DLM took snapshots of it. DLM stops managing them once the volume
+   is deleted, so delete them by hand; with the volume gone, no new ones can
+   appear. This filter matches only snapshots of the restore volume, never the
+   data volume snapshot you restored from:
+
+   ```sh
+   aws ec2 describe-snapshots --profile workloads-readonly --owner-ids self \
+     --filters Name=volume-id,Values=<volume id> \
+     --query 'Snapshots[].[SnapshotId,StartTime,State]' --output table
+   aws ec2 delete-snapshot --profile workloads-admin --snapshot-id <snapshot id>
    ```
 
 Replacing the whole data volume is an OpenTofu change, because the volume has

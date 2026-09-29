@@ -11,6 +11,11 @@ output "host_public_ip" {
   value       = aws_eip.host.public_ip
 }
 
+output "root_volume_id" {
+  description = "The host's root volume. It changes when the host is rebuilt."
+  value       = aws_instance.host.root_block_device[0].volume_id
+}
+
 output "data_volume_id" {
   description = "The Foundry data volume (NVMe serial on the host, without the dash)."
   value       = aws_ebs_volume.data.id

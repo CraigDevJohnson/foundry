@@ -15,7 +15,7 @@ and §10. OpenTofu 1.12.x, AWS provider 6.x. Day-to-day operation of the host
 | `host.tf` | The workloads host: `foundry-host` role (SSM default instance policy, `ssm:GetParameter*` on `parameter/foundry` and `parameter/foundry/*` only, no KMS; exclusive lists for both managed and inline policies) and instance profile, the t4g.small instance (IMDSv2, no key pair, encrypted 10 GiB gp3 root), the 20 GiB `foundry-data` volume with `prevent_destroy`, the Elastic IP with `prevent_destroy`, and the `StatusCheckFailed` alarm to the workloads `alerts` topic (D18) |
 | `backups.tf` | The workloads `foundry-dlm` role and snapshot policy: both volumes tagged `project=foundry`, daily at 10:00 UTC keeping 7, weekly on Sunday at 11:00 UTC keeping 4 |
 | `templates/` | First-boot user data (no secrets, never formats a disk) and the certbot deploy hook it installs |
-| `outputs.tf` | Instance, Elastic IP, data volume, Availability Zone and security group IDs for the runbook |
+| `outputs.tf` | Instance, Elastic IP, root volume, data volume, Availability Zone and security group IDs for the runbook |
 | `variables.tf` | `ami_id` (AL2023 arm64; the instance ignores later changes). Change it only by committing a new default, never with `-var`, so every plan sees the same value |
 
 ## Commands
@@ -55,10 +55,10 @@ aws ec2 create-snapshots --profile workloads-admin \
   --copy-tags-from-source volume --description "foundry pre-upgrade"
 ```
 
-After a rebuild, `tofu -chdir=infra output -raw host_instance_id` prints the
-new instance ID. This changes AWS, so an agent runs it only as an approved
-change. [Operations](../docs/operations.md#snapshot-before-an-upgrade) covers
-stopping Foundry first and deleting the snapshot afterwards.
+This changes AWS, so an agent runs it only as an approved change. After a
+rebuild, `tofu -chdir=infra output -raw host_instance_id` prints the new
+instance ID. [Operations](../docs/operations.md#snapshot-before-an-upgrade)
+covers stopping Foundry first and deleting the snapshot afterwards.
 
 ## Rebuilding the host
 
@@ -81,4 +81,6 @@ once from the hook directory.
 
 Then re-sign the Foundry license on the new host
 ([operations](../docs/operations.md#license-after-a-rebuild)), and update the
-instance and root volume IDs in `docs/operations.md`.
+instance and root volume IDs in `docs/operations.md` and the snapshot command
+above. `tofu -chdir=infra output` prints them (`host_instance_id` and
+`root_volume_id`).
