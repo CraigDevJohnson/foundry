@@ -2,8 +2,9 @@
 # runs in the management account (refactor Phase 3, aws-design §13 fact 2).
 #
 # Every resource here uses the aws.mgmt provider. After the workloads host is
-# built and verified (Phases 7-8), Phase 9 removes this whole file and applies,
-# which deletes the interim snapshot policy, its role and the old host role.
+# built and verified (Phases 7-8), Phase 9 removes this whole file and
+# migration.tf and applies, which deletes the interim snapshot policy, its
+# role, the old host role and the temporary transfer path.
 
 locals {
   # The two volumes of the current host. Both already carried project=foundry
@@ -198,18 +199,19 @@ resource "aws_iam_role_policy_attachments_exclusive" "foundry" {
   depends_on = [aws_iam_role_policy_attachment.foundry]
 }
 
-# D6: no inline policies, which deletes foundry-server-role and its
+# D6: no inline policies of its own, which deleted foundry-server-role and its
 # ssm:GetParameter*, kms:Decrypt and kms:CreateKey grants on *.
 # The Phase 2 read of 90 days of Event History (2026-09-29) found no host API
 # call beyond the SSM agent and Session Manager, which
 # AmazonSSMManagedEC2InstanceDefaultPolicy covers, and the CloudWatch agent's
 # ec2:DescribeTags, which goes away with the agent (D7). Never add
-# ssm:GetParameter* or kms:* on *.
+# ssm:GetParameter* or kms:* on *. The only inline policy is the temporary
+# foundry-migration-put upload grant in migration.tf, removed in Phase 9.
 resource "aws_iam_role_policies_exclusive" "foundry" {
   provider = aws.mgmt
 
   role_name    = aws_iam_role.foundry.name
-  policy_names = []
+  policy_names = [aws_iam_role_policy.foundry_migration_put.name]
 
   depends_on = [aws_iam_role_policy_attachment.foundry]
 }
