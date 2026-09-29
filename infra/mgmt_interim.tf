@@ -133,10 +133,6 @@ resource "aws_dlm_lifecycle_policy" "interim" {
 
 # --- Host role (least privilege, decisions D6 and D7) ---
 
-import {
-  to = aws_iam_role.foundry
-  id = "foundry"
-}
 
 data "aws_iam_policy_document" "foundry_trust" {
   provider = aws.mgmt
@@ -162,10 +158,6 @@ resource "aws_iam_role" "foundry" {
   force_detach_policies = true
 }
 
-import {
-  to = aws_iam_instance_profile.foundry
-  id = "foundry"
-}
 
 resource "aws_iam_instance_profile" "foundry" {
   provider = aws.mgmt

@@ -6,10 +6,6 @@ locals {
   state_bucket = "foundry-tofu-state-${local.workloads_account_id}"
 }
 
-import {
-  to = aws_s3_bucket.state
-  id = local.state_bucket
-}
 
 resource "aws_s3_bucket" "state" {
   bucket = local.state_bucket
@@ -19,10 +15,6 @@ resource "aws_s3_bucket" "state" {
   }
 }
 
-import {
-  to = aws_s3_bucket_versioning.state
-  id = local.state_bucket
-}
 
 resource "aws_s3_bucket_versioning" "state" {
   bucket = aws_s3_bucket.state.id
@@ -32,10 +24,6 @@ resource "aws_s3_bucket_versioning" "state" {
   }
 }
 
-import {
-  to = aws_s3_bucket_public_access_block.state
-  id = local.state_bucket
-}
 
 resource "aws_s3_bucket_public_access_block" "state" {
   bucket = aws_s3_bucket.state.id
@@ -46,10 +34,6 @@ resource "aws_s3_bucket_public_access_block" "state" {
   restrict_public_buckets = true
 }
 
-import {
-  to = aws_s3_bucket_ownership_controls.state
-  id = local.state_bucket
-}
 
 resource "aws_s3_bucket_ownership_controls" "state" {
   bucket = aws_s3_bucket.state.id
@@ -59,10 +43,6 @@ resource "aws_s3_bucket_ownership_controls" "state" {
   }
 }
 
-import {
-  to = aws_s3_bucket_server_side_encryption_configuration.state
-  id = local.state_bucket
-}
 
 resource "aws_s3_bucket_server_side_encryption_configuration" "state" {
   bucket = aws_s3_bucket.state.id

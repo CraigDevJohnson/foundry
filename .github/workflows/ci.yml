@@ -61,3 +61,5 @@ jobs:
         run: tofu -chdir=infra init -backend=false -input=false -lockfile=readonly
       - name: Validate configuration
         run: tofu -chdir=infra validate
+      - name: Test (mocked providers)
+        run: tofu -chdir=infra test

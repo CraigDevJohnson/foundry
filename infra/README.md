@@ -51,9 +51,9 @@ them also removes what they don't list: it detaches
 keeps it) and deletes the inline `foundry-server-role`. Those removals don't
 appear as destroys in the plan.
 
-The `import` blocks are no-ops after the first apply and can be removed in a
-later change. OpenTofu can't run `tofu test` on a root with `import` blocks, so
-the mocked test is added in that change.
+The resources were imported on the first apply (refactor Phase 3, 2026-09-29), and the
+`import` blocks have since been removed. `infra/tests/foundry.tftest.hcl` checks the plan
+offline with mocked providers: `tofu -chdir=infra test` after `init -backend=false`.
 
 ## Manual snapshot before upgrades
 
