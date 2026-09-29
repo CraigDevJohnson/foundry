@@ -29,8 +29,7 @@ through the design interview on 2026-09-08.
 - Take a manual snapshot of both volumes before upgrades. Upgrade automation
   itself has not been selected for the first release.
 - Protect every completed session. Loss of progress from a session in progress
-  is acceptable if storage fails; use a tested, guided restore that Craig can
-  complete the same day.
+  is acceptable if storage fails; recover with a tested, guided restore.
 - Use manual session controls initially; automatic idle shutdown and a fixed
   start/stop schedule are outside the agreed first-release scope.
 - Require the operator to confirm that nobody will be interrupted before

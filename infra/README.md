@@ -9,8 +9,8 @@ and §10. OpenTofu 1.12.x, AWS provider 6.x.
 | `backend.tf` | State in `foundry-tofu-state-793680745829` (workloads, us-west-2), key `foundry/terraform.tfstate`, native S3 lockfile, profile `workloads-admin` |
 | `providers.tf` | Default provider: workloads (`workloads-admin`, 793680745829). Alias `aws.mgmt`: management (`mgmt-admin`, 180294223248), for the interim resources only. Both tag `project=foundry` |
 | `state.tf` | The state bucket, imported after it is created by CLI, with `prevent_destroy` and a TLS-only bucket policy |
-| `mgmt_interim.tf` | Interim protection for the current host in management: the `foundry-dlm` role, the snapshot policy on both volumes, and the least-privilege `foundry` host role and instance profile |
-| `variables.tf` | `keep_cloudwatch_agent` (refactor decision D7, default `false`) |
+| `mgmt_interim.tf` | Interim protection for the current host in management: the `foundry-dlm` role, the snapshot policy on both volumes (the plan fails if either volume lacks `project=foundry`), and the least-privilege `foundry` host role and instance profile |
+| `variables.tf` | `keep_cloudwatch_agent` (refactor decision D7, default `false`). Change it only by committing a new default, never with `-var`, so every plan sees the same value |
 
 ## Commands
 
@@ -45,8 +45,15 @@ deletes the interim policy, `foundry-dlm` and the old `foundry` role. Never
 switch the `aws.mgmt` provider to workloads in place: that would orphan the
 management copies.
 
+The first plan shows the two `*_exclusive` resources as creates, but applying
+them also removes what they don't list: it detaches
+`AmazonSSMManagedInstanceCore` (and `CloudWatchAgentServerPolicy` unless D7
+keeps it) and deletes the inline `foundry-server-role`. Those removals don't
+appear as destroys in the plan.
+
 The `import` blocks are no-ops after the first apply and can be removed in a
-later change.
+later change. OpenTofu can't run `tofu test` on a root with `import` blocks, so
+the mocked test is added in that change.
 
 ## Manual snapshot before upgrades
 

@@ -7,8 +7,8 @@
 
 locals {
   # The two volumes of the current host. Both already carried project=foundry
-  # in the 2026-09-28 read-only audit; the tags are imported below so the
-  # snapshot policy's target is explicit and drift shows up in a plan.
+  # in the 2026-09-28 read-only audit. The tags are not managed here; the
+  # snapshot policy's precondition only checks them.
   interim_volume_ids = {
     root = "vol-005433f97d33e3c96"
     data = "vol-0c95953206040fa9c"
@@ -22,19 +22,18 @@ locals {
 
 # --- Snapshot policy (Data Lifecycle Manager) ---
 
-import {
-  for_each = local.interim_volume_ids
-  to       = aws_ec2_tag.interim_volume[each.key]
-  id       = "${each.value},${local.snapshot_target_tag.key}"
-}
-
-resource "aws_ec2_tag" "interim_volume" {
+# Read-only guard: which of the two volumes carry the snapshot target tag.
+data "aws_ebs_volumes" "interim_tagged" {
   provider = aws.mgmt
-  for_each = local.interim_volume_ids
 
-  resource_id = each.value
-  key         = local.snapshot_target_tag.key
-  value       = local.snapshot_target_tag.value
+  filter {
+    name   = "volume-id"
+    values = values(local.interim_volume_ids)
+  }
+
+  tags = {
+    (local.snapshot_target_tag.key) = local.snapshot_target_tag.value
+  }
 }
 
 data "aws_iam_policy_document" "dlm_trust" {
@@ -121,10 +120,15 @@ resource "aws_dlm_lifecycle_policy" "interim" {
     }
   }
 
-  depends_on = [
-    aws_iam_role_policy_attachment.dlm,
-    aws_ec2_tag.interim_volume,
-  ]
+  depends_on = [aws_iam_role_policy_attachment.dlm]
+
+  lifecycle {
+    # Fail the plan instead of letting DLM silently skip an untagged volume.
+    precondition {
+      condition     = length(setsubtract(values(local.interim_volume_ids), data.aws_ebs_volumes.interim_tagged.ids)) == 0
+      error_message = "Every interim Foundry volume must carry ${local.snapshot_target_tag.key}=${local.snapshot_target_tag.value} before the snapshot policy is applied. Missing: ${join(", ", setsubtract(values(local.interim_volume_ids), data.aws_ebs_volumes.interim_tagged.ids))}."
+    }
+  }
 }
 
 # --- Host role (least privilege, decisions D6 and D7) ---
