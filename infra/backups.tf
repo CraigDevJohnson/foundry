@@ -1,7 +1,6 @@
 # Snapshot policy for the workloads host (aws-design §6.2 and §9.3): both
 # volumes, daily at 10:00 UTC keeping 7 and weekly on Sunday at 11:00 UTC
-# keeping 4, the same as the interim management policy. The addresses differ
-# from mgmt_interim.tf so both can exist until Phase 9 removes the interim one.
+# keeping 4. Take a manual snapshot before upgrades (docs/operations.md).
 
 locals {
   host_snapshot_target_tag = {

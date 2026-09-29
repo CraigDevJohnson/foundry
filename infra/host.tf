@@ -104,14 +104,10 @@ resource "aws_iam_role_policy" "host" {
 }
 
 # Deletes any inline policy not listed here, so one added by hand shows up as
-# drift (G7). foundry-migration-get is the temporary transfer grant in
-# migration.tf; Phase 9 deletes that file and drops its name from this list.
+# drift (G7). foundry-host is the only inline policy.
 resource "aws_iam_role_policies_exclusive" "host" {
-  role_name = aws_iam_role.host.name
-  policy_names = [
-    aws_iam_role_policy.host.name,
-    aws_iam_role_policy.host_migration.name,
-  ]
+  role_name    = aws_iam_role.host.name
+  policy_names = [aws_iam_role_policy.host.name]
 }
 
 resource "aws_iam_instance_profile" "host" {

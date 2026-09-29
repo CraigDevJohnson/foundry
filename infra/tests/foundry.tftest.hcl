@@ -1,5 +1,5 @@
-# Offline plan checks. Both providers are mocked, so no AWS credentials or
-# calls are needed: run `tofu -chdir=infra test` after `init -backend=false`.
+# Offline plan checks. The provider is mocked, so no AWS credentials or calls
+# are needed: run `tofu -chdir=infra test` after `init -backend=false`.
 
 mock_provider "aws" {
   mock_resource "aws_s3_bucket" {
@@ -40,115 +40,6 @@ mock_provider "aws" {
   }
 }
 
-mock_provider "aws" {
-  alias = "mgmt"
-
-  mock_resource "aws_iam_role" {
-    defaults = {
-      arn = "arn:aws:iam::180294223248:role/mock"
-    }
-  }
-
-  mock_data "aws_ebs_volumes" {
-    defaults = {
-      ids = ["vol-005433f97d33e3c96", "vol-0c95953206040fa9c"]
-    }
-  }
-
-  mock_data "aws_iam_policy_document" {
-    defaults = {
-      json = "{\"Version\":\"2012-10-17\",\"Statement\":[]}"
-    }
-  }
-}
-
-run "snapshot_policy_covers_both_volumes" {
-  command = plan
-
-  override_data {
-    target = data.aws_ebs_volumes.interim_tagged
-    values = {
-      ids = ["vol-005433f97d33e3c96", "vol-0c95953206040fa9c"]
-    }
-  }
-
-  assert {
-    condition     = aws_dlm_lifecycle_policy.interim.policy_details[0].resource_types == tolist(["VOLUME"])
-    error_message = "The snapshot policy must target volumes."
-  }
-
-  assert {
-    condition     = aws_dlm_lifecycle_policy.interim.policy_details[0].target_tags == tomap({ project = "foundry" })
-    error_message = "The snapshot policy must target project=foundry."
-  }
-
-  assert {
-    condition = jsonencode([
-      for s in aws_dlm_lifecycle_policy.interim.policy_details[0].schedule : {
-        name     = s.name
-        copy     = s.copy_tags
-        time     = try(s.create_rule[0].times[0], null)
-        interval = s.create_rule[0].interval
-        cron     = s.create_rule[0].cron_expression
-        keep     = s.retain_rule[0].count
-      }
-      ]) == jsonencode([
-      { name = "daily", copy = true, time = "10:00", interval = 24, cron = null, keep = 7 },
-      { name = "weekly", copy = true, time = null, interval = null, cron = "cron(0 11 ? * SUN *)", keep = 4 },
-    ])
-    error_message = "Expected daily 10:00 UTC keeping 7 and weekly Sunday 11:00 UTC keeping 4."
-  }
-}
-
-run "dlm_role_is_scoped_to_this_account" {
-  command = plan
-
-  assert {
-    condition = jsonencode({
-      for c in data.aws_iam_policy_document.dlm_trust.statement[0].condition : c.variable => [c.test, c.values]
-      }) == jsonencode({
-      "aws:SourceAccount" = ["StringEquals", ["180294223248"]]
-      "aws:SourceArn"     = ["ArnLike", ["arn:aws:dlm:us-west-2:180294223248:policy/*"]]
-    })
-    error_message = "The DLM role must trust only DLM policies in the management account."
-  }
-}
-
-run "host_role_is_least_privilege_by_default" {
-  command = plan
-
-  assert {
-    condition     = aws_iam_role_policy_attachments_exclusive.foundry.policy_arns == toset(["arn:aws:iam::aws:policy/AmazonSSMManagedEC2InstanceDefaultPolicy"])
-    error_message = "By default (D7) the host role keeps only the SSM default instance policy."
-  }
-
-  assert {
-    condition     = toset(aws_iam_role_policies_exclusive.foundry.policy_names) == toset(["foundry-migration-put"])
-    error_message = "D6: the old host role's only inline policy is the temporary foundry-migration-put."
-  }
-
-  assert {
-    condition     = aws_iam_role.foundry.force_detach_policies
-    error_message = "The imported host role must force-detach policies on delete."
-  }
-}
-
-run "cloudwatch_agent_can_be_kept" {
-  command = plan
-
-  variables {
-    keep_cloudwatch_agent = true
-  }
-
-  assert {
-    condition = aws_iam_role_policy_attachments_exclusive.foundry.policy_arns == toset([
-      "arn:aws:iam::aws:policy/AmazonSSMManagedEC2InstanceDefaultPolicy",
-      "arn:aws:iam::aws:policy/CloudWatchAgentServerPolicy",
-    ])
-    error_message = "keep_cloudwatch_agent must add only CloudWatchAgentServerPolicy."
-  }
-}
-
 run "state_bucket_is_tls_only" {
   command = plan
 
@@ -161,20 +52,7 @@ run "state_bucket_is_tls_only" {
   }
 }
 
-run "untagged_volume_fails_the_plan" {
-  command = plan
-
-  override_data {
-    target = data.aws_ebs_volumes.interim_tagged
-    values = {
-      ids = ["vol-005433f97d33e3c96"]
-    }
-  }
-
-  expect_failures = [aws_dlm_lifecycle_policy.interim]
-}
-
-# --- Workloads host (refactor Phase 7) ---
+# --- Workloads host ---
 
 run "security_group_opens_only_player_ports" {
   command = plan
@@ -252,10 +130,9 @@ run "host_role_is_least_privilege" {
     error_message = "The host role must trust only EC2."
   }
 
-  # foundry-migration-get is the temporary grant checked in transfer_path_is_scoped.
   assert {
-    condition     = setsubtract(toset(aws_iam_role_policies_exclusive.host.policy_names), ["foundry-migration-get"]) == toset(["foundry-host"])
-    error_message = "The host role's exclusive inline list must hold foundry-host and nothing else permanent."
+    condition     = toset(aws_iam_role_policies_exclusive.host.policy_names) == toset(["foundry-host"])
+    error_message = "The host role's exclusive inline list must hold only foundry-host."
   }
 }
 
@@ -376,72 +253,6 @@ run "workloads_snapshot_policy" {
       "aws:SourceArn"     = ["ArnLike", ["arn:aws:dlm:us-west-2:793680745829:policy/*"]]
     })
     error_message = "The workloads DLM role must trust only DLM policies in the workloads account."
-  }
-}
-
-run "transfer_path_is_scoped" {
-  command = plan
-
-  assert {
-    condition = anytrue([
-      for s in data.aws_iam_policy_document.migration_bucket.statement :
-      s.effect == "Deny" && anytrue([
-        for c in s.condition : c.test == "Bool" && c.variable == "aws:SecureTransport" && contains(tolist(c.values), "false")
-      ])
-    ])
-    error_message = "The transfer bucket policy must deny requests without TLS."
-  }
-
-  assert {
-    condition = alltrue(flatten([
-      for s in data.aws_iam_policy_document.migration_bucket.statement : [
-        for p in s.principals : p.identifiers == toset(["arn:aws:iam::180294223248:role/foundry"])
-      ] if s.effect != "Deny"
-    ]))
-    error_message = "The transfer bucket may grant only the management foundry role."
-  }
-
-  assert {
-    condition = alltrue(flatten([
-      for s in concat(
-        data.aws_iam_policy_document.migration_bucket.statement,
-        data.aws_iam_policy_document.host_migration.statement,
-        data.aws_iam_policy_document.foundry_migration_put.statement,
-        ) : [
-        for r in s.resources : contains([
-          "arn:aws:s3:::foundry-migration-793680745829",
-          "arn:aws:s3:::foundry-migration-793680745829/*",
-          "arn:aws:s3:::foundry-migration-793680745829/transfer/*",
-        ], r)
-      ]
-    ]))
-    error_message = "Transfer grants must stay inside the foundry-migration bucket."
-  }
-
-  assert {
-    condition = alltrue(flatten([
-      for s in concat(
-        data.aws_iam_policy_document.host_migration.statement,
-        data.aws_iam_policy_document.foundry_migration_put.statement,
-        ) : [
-        for a in s.actions : startswith(a, "s3:") && !strcontains(a, "*")
-      ]
-    ]))
-    error_message = "Transfer grants may hold only named s3 actions: no kms and no wildcards."
-  }
-
-  assert {
-    condition     = contains(aws_iam_role_policies_exclusive.host.policy_names, "foundry-migration-get")
-    error_message = "The host role's exclusive inline list must keep the temporary foundry-migration-get grant until Phase 9."
-  }
-
-  assert {
-    condition = (
-      aws_s3_bucket.migration.force_destroy &&
-      one(aws_s3_bucket_lifecycle_configuration.migration.rule[0].expiration).days == 7 &&
-      one(aws_s3_bucket_lifecycle_configuration.migration.rule[0].abort_incomplete_multipart_upload).days_after_initiation == 1
-    )
-    error_message = "The transfer bucket expires copies after 7 days and incomplete uploads after 1 day."
   }
 }
 

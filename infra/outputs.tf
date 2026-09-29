@@ -1,4 +1,5 @@
-# IDs the Phase 7-9 runbook steps need (infra/README.md). None are secret.
+# IDs the runbook steps need (docs/operations.md, infra/README.md). None are
+# secret.
 
 output "host_instance_id" {
   description = "The Foundry host instance."

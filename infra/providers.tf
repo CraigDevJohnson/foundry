@@ -17,10 +17,12 @@ provider "aws" {
   }
 }
 
-# Interim provider for the hand-built host that still runs in management.
-# Only mgmt_interim.tf uses it. When Foundry moves, the workloads copies are
-# added on the default provider and these resources are removed from config;
-# never switch this provider to workloads in place (aws-design §13, fact 2).
+# TEMPORARY: no resource uses this provider any more. It stays only for the
+# refactor Phase 9 apply, which destroys the interim management resources
+# that were in mgmt_interim.tf and migration.tf; state still records them
+# under this provider, so the destroy needs it. A follow-up commit removes this
+# block once that apply has succeeded and a plan is clean. Never switch it to
+# workloads in place (aws-design §13, fact 2).
 provider "aws" {
   alias               = "mgmt"
   region              = local.region

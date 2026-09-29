@@ -1,5 +1,10 @@
 # Adopt and roll back the existing Foundry host
 
+> **Historical.** This runbook was for adopting the hand-built host in the
+> management account. Foundry moved to a new host in the workloads account
+> on 2026-09-29 instead, so it no longer applies. For the current host and
+> how to operate it, see [operations](operations.md).
+
 Use this runbook during the separately authorized live gate in
 [issue #10](https://github.com/CraigDevJohnson/foundry/issues/10). Issue #5 supplies
 offline templates and tests only. It does not authorize host access, service

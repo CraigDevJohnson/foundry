@@ -56,15 +56,17 @@ management plane is relied upon.
 ## Project documentation
 
 - [Domain glossary](CONTEXT.md) defines the project's terms.
-- [Hosting baseline](docs/hosting-baseline.md) records the existing installation
-  and related management tools verified during discovery.
+- [Operations](docs/operations.md) covers running the workloads host: DNS,
+  certificate renewal, snapshots, restores, the license and the move record.
+- [Hosting baseline](docs/hosting-baseline.md) is historical: the old
+  management-account host and related management tools as found in discovery.
 - [Host lifecycle contract](docs/host-contract.md) defines the pinned inputs,
   filesystem paths, fixed commands, and offline checks for issue #5.
 - [Local recovery sets](docs/local-recovery-sets.md) describes the fixture-tested capture,
   integrity verification and isolated materialization tools; cloud protection and
   live restore remain pending.
-- [Host adoption and rollback](docs/host-adoption.md) records the separate
-  authorized live procedure and remaining proof required before reliance.
+- [Host adoption and rollback](docs/host-adoption.md) is historical: the
+  adoption procedure for the old host, replaced by the move to workloads.
 - [First-release specification](https://github.com/CraigDevJohnson/foundry/issues/2)
   contains the consolidated scope, acceptance checks, and adoption prerequisites.
 - [Portfolio and Foundry responsibilities](docs/adr/0001-portfolio-and-foundry-responsibilities.md)
@@ -72,8 +74,8 @@ management plane is relied upon.
 - [Session-based recovery](docs/adr/0002-session-based-recovery.md) and
   [Session archive protection](docs/adr/0004-session-archive-protection.md)
   are superseded by aws-design §6.2 and §9.3 and kept as history.
-- [Infrastructure](infra/README.md) describes the OpenTofu root, its state and
-  the interim resources that protect the current host.
+- [Infrastructure](infra/README.md) describes the OpenTofu root that builds the
+  host, its state and how to rebuild the host.
 - [Backend architecture](docs/adr/0003-serverless-management-backend.md) records
   the accepted Go Lambda and Systems Manager implementation direction.
 - [Status API](docs/status-api.md) documents the first read-only backend slice.

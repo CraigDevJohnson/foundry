@@ -1,5 +1,10 @@
 # Existing hosting baseline
 
+> **Historical.** This records the hand-built host in the management account
+> as observed on 2026-09-08. Foundry moved to a new host in the workloads
+> account on 2026-09-29, and the old host was stopped the same day. For the
+> current host and how to operate it, see [operations](operations.md).
+
 Observed on 2026-09-08 through read-only discovery. This is an inventory of the
 existing installation, not a target architecture or an implementation spec.
 Recheck these observations before making operational changes.
