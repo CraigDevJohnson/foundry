@@ -1,8 +1,17 @@
 ---
-status: accepted
+status: superseded
+superseded-by: aws-setup aws-design.md §6.2 and §9.3
 ---
 
 # Protect the three session archives with per-version legal holds
+
+> **Superseded on 2026-09-28** by the AWS design in aws-setup, [§6.2](https://github.com/CraigDevJohnson/aws-setup/blob/main/aws-design.md#62-foundry-game-server-repo-foundry) and [§9.3](https://github.com/CraigDevJohnson/aws-setup/blob/main/aws-design.md#93-backups-and-recovery).
+> The three-session archive series, its legal holds and the Oregon and Ohio
+> copies are not built. Foundry backups are Data Lifecycle Manager snapshots of
+> both EBS volumes in us-west-2 (daily keeping 7, weekly keeping 4), plus a
+> manual snapshot before upgrades. The REC-02 exception recorded below is void
+> (aws-design §13, "Superseded commitments"). The text below is kept as history
+> only.
 
 The latest three completed sessions must remain recoverable even when sessions
 are infrequent. A fixed 30-day AWS Backup Vault Lock retention would keep more
