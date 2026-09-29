@@ -6,3 +6,12 @@
 __pycache__/
 *.pyc
 /dist/
+
+# OpenTofu
+.terraform/
+*.tfstate
+*.tfstate.*
+*.plan
+*.tfplan
+crash.log
+crash.*.log

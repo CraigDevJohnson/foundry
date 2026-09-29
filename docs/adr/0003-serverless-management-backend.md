@@ -4,6 +4,12 @@ status: accepted
 
 # Use a Go Lambda controller with Systems Manager Automation
 
+> **Recovery storage superseded on 2026-09-28** by aws-setup
+> [aws-design §6.2 and §9.3](https://github.com/CraigDevJohnson/aws-setup/blob/main/aws-design.md#93-backups-and-recovery):
+> Data Lifecycle Manager snapshots replace the S3 recovery sets, legal holds and
+> governance-locked AWS Backup vaults described below. The controller direction
+> stands.
+
 Use a privately invoked Go Lambda controller and Systems Manager Automation
 runbooks, with Terraform defining the infrastructure and service setup. This
 fits the portfolio's existing Go and AWS integration and keeps management

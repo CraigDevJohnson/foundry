@@ -1,8 +1,17 @@
 ---
-status: accepted
+status: superseded
+superseded-by: aws-setup aws-design.md §6.2 and §9.3
 ---
 
 # Protect completed sessions and use guided same-day recovery
+
+> **Superseded on 2026-09-28** by the AWS design in aws-setup, [§6.2](https://github.com/CraigDevJohnson/aws-setup/blob/main/aws-design.md#62-foundry-game-server-repo-foundry) and [§9.3](https://github.com/CraigDevJohnson/aws-setup/blob/main/aws-design.md#93-backups-and-recovery).
+> Foundry is now protected by a Data Lifecycle Manager policy on both EBS
+> volumes in us-west-2: daily snapshots keeping 7 and weekly snapshots keeping
+> 4, plus a manual snapshot before upgrades and one restore test after setup.
+> Recovery is best effort, about 24 hours. There is no recovery Region,
+> session-archive series, vault lock, legal hold, cross-Region copy or
+> restore-drill calendar. The text below is kept as history only.
 
 For a personal game of at most five concurrent users, availability is required
 during play rather than continuously. The operator explicitly starts and ends

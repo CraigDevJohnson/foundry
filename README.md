@@ -26,29 +26,24 @@ through the design interview on 2026-09-08.
 - Keep the game available during play; continuous availability outside play is
   not required.
 - Schedule disruptive maintenance outside play.
-- Require a recoverable backup before upgrades. Upgrade automation itself has
-  not been selected for the first release.
+- Take a manual snapshot of both volumes before upgrades. Upgrade automation
+  itself has not been selected for the first release.
 - Protect every completed session. Loss of progress from a session in progress
-  is acceptable if storage fails; use a tested, guided restore that Craig can
-  complete the same day.
+  is acceptable if storage fails; recover with a tested, guided restore.
 - Use manual session controls initially; automatic idle shutdown and a fixed
   start/stop schedule are outside the agreed first-release scope.
 - Require the operator to confirm that nobody will be interrupted before
   End session or a service restart. Automatic player detection is not required.
 - If End session cannot confirm a successful backup, keep the host running,
   report the failure, and require a successful retry before normal shutdown.
-- Retain successful session backups for the latest three distinct completed
-  sessions in Oregon and Ohio, alongside 30-day history of
-  application-consistent scheduled recovery points in both Regions. Keep
-  pre-upgrade backups until the operator explicitly releases them. A fourth
-  copy may exist during replacement verification. If verification
-  fails, retain it with the prior three, then alert and retry. If unresolved
-  within 24 hours of failure or before the next session, whichever comes first,
-  return to Craig.
-- Check every backup's integrity. Prove recovery through an actual isolated
-  restore before first use, after relevant backup/recovery or infrastructure
-  changes, and quarterly; include temporary recovery resources in the cost
-  estimate.
+- Back up both EBS volumes with a Data Lifecycle Manager policy in us-west-2:
+  daily snapshots at 10:00 UTC keeping 7, and weekly snapshots on Sundays at
+  11:00 UTC keeping 4 ([infra](infra/README.md)). Keep each manual pre-upgrade
+  snapshot until the upgrade is verified. Recovery is best effort, about
+  24 hours; there is no recovery Region, cross-Region copy, vault lock or legal
+  hold ([aws-design §6.2 and §9.3](https://github.com/CraigDevJohnson/aws-setup/blob/main/aws-design.md#62-foundry-game-server-repo-foundry)).
+- Test a restore once after the snapshot policy is set up. There is no
+  restore-drill calendar.
 - Keep costs appropriate for a small personal game server. No fixed monthly cap
   has been chosen; proposals must explain any increase to the current operating
   cost.
@@ -74,10 +69,11 @@ management plane is relied upon.
   contains the consolidated scope, acceptance checks, and adoption prerequisites.
 - [Portfolio and Foundry responsibilities](docs/adr/0001-portfolio-and-foundry-responsibilities.md)
   records the management boundary.
-- [Session-based recovery](docs/adr/0002-session-based-recovery.md) records the
-  availability and recovery trade-off.
-- [Session archive protection](docs/adr/0004-session-archive-protection.md)
-  records the scoped legal-hold exception for the three-session series.
+- [Session-based recovery](docs/adr/0002-session-based-recovery.md) and
+  [Session archive protection](docs/adr/0004-session-archive-protection.md)
+  are superseded by aws-design §6.2 and §9.3 and kept as history.
+- [Infrastructure](infra/README.md) describes the OpenTofu root, its state and
+  the interim resources that protect the current host.
 - [Backend architecture](docs/adr/0003-serverless-management-backend.md) records
   the accepted Go Lambda and Systems Manager implementation direction.
 - [Status API](docs/status-api.md) documents the first read-only backend slice.
@@ -107,6 +103,10 @@ Use Go 1.27.1 or newer and run `make ci` for formatting, vet, race-enabled tests
 a Linux ARM64 Lambda build, and vulnerability checks. `make build` produces
 `dist/bootstrap.zip`. See the [status reference](docs/status-api.md) for required
 configuration and local invocation.
+
+The OpenTofu root in `infra/` uses OpenTofu 1.12.x. CI runs `tofu fmt -check`
+and `tofu validate` on it without AWS credentials. Read
+[infra/README.md](infra/README.md) before running a plan.
 
 ## Security
 

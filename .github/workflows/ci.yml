@@ -40,3 +40,26 @@ jobs:
         run: make ci
       - name: Verify module manifests are unchanged
         run: git diff --exit-code -- go.mod go.sum
+
+  opentofu:
+    name: OpenTofu checks
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Set up OpenTofu
+        uses: opentofu/setup-opentofu@a1320f892987e89d278cc92dc5adc984fb93aca4 # v2.0.2
+        with:
+          tofu_version: 1.12.6
+          tofu_wrapper: false
+      - name: Check formatting
+        run: tofu fmt -check -recursive -diff infra
+      - name: Initialize providers without a backend
+        run: tofu -chdir=infra init -backend=false -input=false -lockfile=readonly
+      - name: Validate configuration
+        run: tofu -chdir=infra validate
+      - name: Test (mocked providers)
+        run: tofu -chdir=infra test
