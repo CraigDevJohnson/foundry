@@ -208,9 +208,11 @@ resource "aws_iam_role_policy_attachments_exclusive" "foundry" {
 
 # D6: no inline policies, which deletes foundry-server-role and its
 # ssm:GetParameter*, kms:Decrypt and kms:CreateKey grants on *.
-# TODO(phase 2): if the host API-usage read shows the host needs another API,
-# add one aws_iam_role_policy scoped to that resource and list its name here.
-# Never ssm:GetParameter* or kms:* on *.
+# The Phase 2 read of 90 days of Event History (2026-09-29) found no host API
+# call beyond the SSM agent and Session Manager, which
+# AmazonSSMManagedEC2InstanceDefaultPolicy covers, and the CloudWatch agent's
+# ec2:DescribeTags, which goes away with the agent (D7). Never add
+# ssm:GetParameter* or kms:* on *.
 resource "aws_iam_role_policies_exclusive" "foundry" {
   provider = aws.mgmt
 
