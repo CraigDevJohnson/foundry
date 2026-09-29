@@ -9,7 +9,7 @@ and §10. OpenTofu 1.12.x, AWS provider 6.x. Day-to-day operation of the host
 | File | Holds |
 |---|---|
 | `backend.tf` | State in `foundry-tofu-state-793680745829` (workloads, us-west-2), key `foundry/terraform.tfstate`, native S3 lockfile, profile `workloads-admin` |
-| `providers.tf` | Default provider: workloads (`workloads-admin`, 793680745829), tagging `project=foundry`. Alias `aws.mgmt` (`mgmt-admin`, 180294223248) is used by no resource: it stays only for the refactor Phase 9 apply that destroys the old interim management resources, and a follow-up commit removes it |
+| `providers.tf` | The workloads provider (`workloads-admin`, 793680745829), tagging `project=foundry` |
 | `state.tf` | The state bucket, imported after it is created by CLI, with `prevent_destroy` and a TLS-only bucket policy |
 | `network.tf` | Default VPC, its default subnet in AZ ID `usw2-az2` (us-west-2a in workloads), and the `foundry` security group: 80/tcp and 30000/tcp from `0.0.0.0/0`, all IPv4 egress, no SSH |
 | `host.tf` | The workloads host: `foundry-host` role (SSM default instance policy, `ssm:GetParameter*` on `parameter/foundry` and `parameter/foundry/*` only, no KMS; exclusive lists for both managed and inline policies) and instance profile, the t4g.small instance (IMDSv2, no key pair, encrypted 10 GiB gp3 root), the 20 GiB `foundry-data` volume with `prevent_destroy`, the Elastic IP with `prevent_destroy`, and the `StatusCheckFailed` alarm to the workloads `alerts` topic (D18) |
