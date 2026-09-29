@@ -24,7 +24,7 @@
       "Bash(*portfolio-deployer*)",
       "Bash(*portfolio-ci-roles-administrator*)",
       "Bash(*portfolio-auth-policy-admin*)",
-      "mcp__*aws*"
+      "mcp__671f7a52-56fe-42c3-9854-a8c1a325a21f"
     ],
     "disableBypassPermissionsMode": "disable"
   }
