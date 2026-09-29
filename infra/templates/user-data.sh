@@ -71,10 +71,13 @@ if id ec2-user >/dev/null 2>&1; then
 fi
 
 # --- Data volume mount point ---
-# nofail: the host boots normally before the volume is formatted.
+# Mount the data volume by its NVMe volume-ID link, never by label or UUID: a
+# restore-test volume made from its snapshot has the same label and UUID.
+# nofail: the host boots normally before the volume is attached or formatted.
+DATA_DEVICE='${data_volume_device}'
 mkdir -p /foundry
-if ! grep -q '^LABEL=foundry-data[[:space:]]' /etc/fstab; then
-  echo 'LABEL=foundry-data /foundry ext4 defaults,nofail 0 2' >>/etc/fstab
+if ! grep -q '[[:space:]]/foundry[[:space:]]' /etc/fstab; then
+  echo "$DATA_DEVICE /foundry ext4 defaults,nofail 0 2" >>/etc/fstab
 fi
 
 # --- Foundry unit (D15: plain systemd unit) ---

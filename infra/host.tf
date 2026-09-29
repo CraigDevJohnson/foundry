@@ -9,17 +9,30 @@ locals {
   node_bin = "/usr/bin/node-24"
 
   # D15: a plain systemd unit, so the host-contract preflight line is dropped.
+  # D16: the host is always on and nothing else restarts Foundry, so a crash
+  # restarts it after 5 seconds, as on the old host. A clean `systemctl stop`
+  # never restarts it.
   foundry_unit_source = file("${path.module}/../host/templates/foundry.service")
   foundry_unit = replace(
-    replace(local.foundry_unit_source, "ExecStartPre=+/usr/local/sbin/foundry-host preflight\n", ""),
-    "ExecStart=/usr/bin/node ",
-    "ExecStart=${local.node_bin} ",
+    replace(
+      replace(local.foundry_unit_source, "ExecStartPre=+/usr/local/sbin/foundry-host preflight\n", ""),
+      "ExecStart=/usr/bin/node ",
+      "ExecStart=${local.node_bin} ",
+    ),
+    "Restart=no\n",
+    "Restart=on-failure\nRestartSec=5\n",
   )
 
+  # The data volume's stable NVMe link. fstab mounts this exact volume, never a
+  # label or UUID: a restore-test volume made from its snapshot carries the same
+  # label and UUID and must never be taken for /foundry.
+  data_volume_device = "/dev/disk/by-id/nvme-Amazon_Elastic_Block_Store_${replace(aws_ebs_volume.data.id, "-", "")}"
+
   user_data = templatefile("${path.module}/templates/user-data.sh", {
-    node_bin     = local.node_bin
-    foundry_unit = local.foundry_unit
-    cert_deploy  = file("${path.module}/templates/foundry-cert-deploy.sh")
+    node_bin           = local.node_bin
+    foundry_unit       = local.foundry_unit
+    cert_deploy        = file("${path.module}/templates/foundry-cert-deploy.sh")
+    data_volume_device = local.data_volume_device
   })
 
   # Workloads us-west-2 alerts topic, owned by aws-setup (aws-design §7).
@@ -90,6 +103,17 @@ resource "aws_iam_role_policy" "host" {
   policy = data.aws_iam_policy_document.host.json
 }
 
+# Deletes any inline policy not listed here, so one added by hand shows up as
+# drift (G7). foundry-migration-get is the temporary transfer grant in
+# migration.tf; Phase 9 deletes that file and drops its name from this list.
+resource "aws_iam_role_policies_exclusive" "host" {
+  role_name = aws_iam_role.host.name
+  policy_names = [
+    aws_iam_role_policy.host.name,
+    aws_iam_role_policy.host_migration.name,
+  ]
+}
+
 resource "aws_iam_instance_profile" "host" {
   name = "foundry-host"
   role = aws_iam_role.host.name
@@ -136,8 +160,13 @@ resource "aws_instance" "host" {
     ignore_changes = [ami, user_data]
 
     precondition {
-      condition     = !strcontains(local.foundry_unit, "ExecStartPre=") && strcontains(local.foundry_unit, "ExecStart=${local.node_bin} ")
-      error_message = "host/templates/foundry.service changed: the preflight line must be removed and ExecStart must call ${local.node_bin}. Update the replace() calls in host.tf."
+      condition = (
+        !strcontains(local.foundry_unit, "ExecStartPre=") &&
+        strcontains(local.foundry_unit, "ExecStart=${local.node_bin} ") &&
+        strcontains(local.foundry_unit, "\nRestart=on-failure\nRestartSec=5\n") &&
+        !strcontains(local.foundry_unit, "\nRestart=no\n")
+      )
+      error_message = "host/templates/foundry.service changed: the preflight line must be removed, ExecStart must call ${local.node_bin}, and Restart must be on-failure with RestartSec=5. Update the replace() calls in host.tf."
     }
   }
 
@@ -181,6 +210,11 @@ resource "aws_eip" "host" {
 
   tags = {
     Name = "foundry"
+  }
+
+  lifecycle {
+    # The hand-set Cloudflare A record points at this exact address (D19).
+    prevent_destroy = true
   }
 }
 

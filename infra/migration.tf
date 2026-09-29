@@ -3,7 +3,8 @@
 # shared across accounts, so the move is a file-level copy through this bucket.
 #
 # Phase 9 deletes this whole file, together with mgmt_interim.tf, and applies.
-# Nothing outside those two files refers to anything here.
+# Outside those two files, only aws_iam_role_policies_exclusive.host (host.tf)
+# refers to anything here; Phase 9 drops foundry-migration-get from its list.
 
 locals {
   migration_bucket     = "foundry-migration-${local.workloads_account_id}"

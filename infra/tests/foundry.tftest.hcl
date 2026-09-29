@@ -32,6 +32,12 @@ mock_provider "aws" {
       availability_zone = "us-west-2a"
     }
   }
+
+  mock_resource "aws_ebs_volume" {
+    defaults = {
+      id = "vol-0123456789abcdef0"
+    }
+  }
 }
 
 mock_provider "aws" {
@@ -216,7 +222,7 @@ run "host_role_is_least_privilege" {
 
   assert {
     condition = alltrue(flatten([
-      for s in concat(data.aws_iam_policy_document.host.statement, data.aws_iam_policy_document.host_migration.statement) : [
+      for s in data.aws_iam_policy_document.host.statement : [
         for a in s.actions : !startswith(lower(a), "kms:") && !strcontains(a, "*")
       ]
     ]))
@@ -225,7 +231,7 @@ run "host_role_is_least_privilege" {
 
   assert {
     condition = alltrue(flatten([
-      for s in concat(data.aws_iam_policy_document.host.statement, data.aws_iam_policy_document.host_migration.statement) : [
+      for s in data.aws_iam_policy_document.host.statement : [
         for r in s.resources : r != "*"
       ]
     ]))
@@ -234,7 +240,7 @@ run "host_role_is_least_privilege" {
 
   assert {
     condition = alltrue(flatten([
-      for s in concat(data.aws_iam_policy_document.host.statement, data.aws_iam_policy_document.host_migration.statement) : [
+      for s in data.aws_iam_policy_document.host.statement : [
         for r in s.resources : can(regex("^arn:aws:ssm:us-west-2:793680745829:parameter/foundry(/\\*)?$", r))
       ] if anytrue([for a in s.actions : startswith(a, "ssm:")])
     ]))
@@ -244,6 +250,12 @@ run "host_role_is_least_privilege" {
   assert {
     condition     = one(data.aws_iam_policy_document.host_trust.statement[0].principals).identifiers == toset(["ec2.amazonaws.com"])
     error_message = "The host role must trust only EC2."
+  }
+
+  # foundry-migration-get is the temporary grant checked in transfer_path_is_scoped.
+  assert {
+    condition     = setsubtract(toset(aws_iam_role_policies_exclusive.host.policy_names), ["foundry-migration-get"]) == toset(["foundry-host"])
+    error_message = "The host role's exclusive inline list must hold foundry-host and nothing else permanent."
   }
 }
 
@@ -275,14 +287,16 @@ run "host_instance_settings" {
   assert {
     condition = alltrue([
       strcontains(aws_instance.host.user_data, "dnf install -y nodejs24 certbot"),
-      strcontains(aws_instance.host.user_data, "LABEL=foundry-data /foundry ext4 defaults,nofail 0 2"),
+      strcontains(aws_instance.host.user_data, "DATA_DEVICE='/dev/disk/by-id/nvme-Amazon_Elastic_Block_Store_vol0123456789abcdef0'"),
+      strcontains(aws_instance.host.user_data, "echo \"$DATA_DEVICE /foundry ext4 defaults,nofail 0 2\" >>/etc/fstab"),
       strcontains(aws_instance.host.user_data, "ExecStart=/usr/bin/node-24 /foundry/foundryvtt/main.js"),
       strcontains(aws_instance.host.user_data, "OnCalendar=*-*-* 10:00:00 UTC"),
       strcontains(aws_instance.host.user_data, "systemctl enable --now certbot-renew.timer"),
       strcontains(aws_instance.host.user_data, "/etc/letsencrypt/renewal-hooks/deploy/foundry.sh"),
       strcontains(aws_instance.host.user_data, "systemctl try-restart foundry.service"),
+      strcontains(aws_instance.host.user_data, "\nRestart=on-failure\nRestartSec=5\n"),
     ])
-    error_message = "User data must install Node.js 24 and certbot, the fstab entry, the unit, the timer override and the deploy hook."
+    error_message = "User data must install Node.js 24 and certbot, the fstab entry for the data volume ID, the unit with Restart=on-failure, the timer override and the deploy hook."
   }
 
   assert {
@@ -291,8 +305,10 @@ run "host_instance_settings" {
       strcontains(aws_instance.host.user_data, "mkfs"),
       strcontains(aws_instance.host.user_data, "enable foundry"),
       strcontains(aws_instance.host.user_data, "enable --now foundry"),
+      strcontains(aws_instance.host.user_data, "Restart=no"),
+      strcontains(aws_instance.host.user_data, "LABEL=foundry-data /foundry"),
     ])
-    error_message = "User data must not keep the preflight line, format a disk, or enable Foundry before the restore."
+    error_message = "User data must not keep the preflight line or Restart=no, mount /foundry by label, format a disk, or enable Foundry before the restore."
   }
 }
 
@@ -400,6 +416,23 @@ run "transfer_path_is_scoped" {
       ]
     ]))
     error_message = "Transfer grants must stay inside the foundry-migration bucket."
+  }
+
+  assert {
+    condition = alltrue(flatten([
+      for s in concat(
+        data.aws_iam_policy_document.host_migration.statement,
+        data.aws_iam_policy_document.foundry_migration_put.statement,
+        ) : [
+        for a in s.actions : startswith(a, "s3:") && !strcontains(a, "*")
+      ]
+    ]))
+    error_message = "Transfer grants may hold only named s3 actions: no kms and no wildcards."
+  }
+
+  assert {
+    condition     = contains(aws_iam_role_policies_exclusive.host.policy_names, "foundry-migration-get")
+    error_message = "The host role's exclusive inline list must keep the temporary foundry-migration-get grant until Phase 9."
   }
 
   assert {
