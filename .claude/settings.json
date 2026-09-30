@@ -16,14 +16,6 @@
       "Bash(aws login*)",
       "Bash(*--profile root*)",
       "Bash(*PROFILE=root*)",
-      "Bash(*aws-setup-foundation*)",
-      "Bash(*aws-setup-state-access*)",
-      "Bash(*aws-setup-assignment-manager*)",
-      "Bash(*aws-setup-member-foundation*)",
-      "Bash(*aws-setup-member-bootstrap*)",
-      "Bash(*portfolio-deployer*)",
-      "Bash(*portfolio-ci-roles-administrator*)",
-      "Bash(*portfolio-auth-policy-admin*)",
       "mcp__671f7a52-56fe-42c3-9854-a8c1a325a21f"
     ],
     "disableBypassPermissionsMode": "disable"
