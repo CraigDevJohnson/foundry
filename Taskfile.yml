@@ -41,13 +41,9 @@ tasks:
 
   build:
     desc: Build the Linux ARM64 Lambda bootstrap and its zip in dist/
-    env:
-      CGO_ENABLED: '0'
-      GOOS: linux
-      GOARCH: arm64
     cmds:
       - mkdir -p dist
-      - "{{.GO}} build -tags lambda.norpc -trimpath -ldflags='-s -w' -o dist/bootstrap ./cmd/lambda"
+      - "CGO_ENABLED=0 GOOS=linux GOARCH=arm64 {{.GO}} build -tags lambda.norpc -trimpath -ldflags='-s -w' -o dist/bootstrap ./cmd/lambda"
       - rm -f dist/bootstrap.zip
       - cd dist && zip -q -X bootstrap.zip bootstrap
 
