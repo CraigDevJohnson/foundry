@@ -1,0 +1,54 @@
+version: '3'
+
+vars:
+  GO: '{{.GO | default "go"}}'
+  GOVULNCHECK_VERSION: v1.7.0
+
+tasks:
+  default:
+    desc: Run the CI checks
+    cmds:
+      - task: ci
+
+  ci:
+    desc: Check formatting, vet, test, build the Lambda artifact and scan it
+    cmds:
+      - task: fmt-check
+      - task: vet
+      - task: test
+      - task: vuln
+
+  fmt:
+    desc: Format Go sources
+    cmds:
+      - '{{.GO}} fmt ./...'
+
+  fmt-check:
+    desc: Fail when Go sources need formatting
+    cmds:
+      - cmd: test -z "$(gofmt -l cmd internal)" || { gofmt -l cmd internal; exit 1; }
+        silent: true
+
+  vet:
+    desc: Run go vet
+    cmds:
+      - '{{.GO}} vet ./...'
+
+  test:
+    desc: Run tests with the race detector
+    cmds:
+      - '{{.GO}} test -race ./...'
+
+  build:
+    desc: Build the Linux ARM64 Lambda bootstrap and its zip in dist/
+    cmds:
+      - mkdir -p dist
+      - "CGO_ENABLED=0 GOOS=linux GOARCH=arm64 {{.GO}} build -tags lambda.norpc -trimpath -ldflags='-s -w' -o dist/bootstrap ./cmd/lambda"
+      - rm -f dist/bootstrap.zip
+      - cd dist && zip -q -X bootstrap.zip bootstrap
+
+  vuln:
+    desc: Scan the Lambda binary with govulncheck
+    deps: [build]
+    cmds:
+      - '{{.GO}} run golang.org/x/vuln/cmd/govulncheck@{{.GOVULNCHECK_VERSION}} -mode=binary dist/bootstrap'
