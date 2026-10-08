@@ -115,8 +115,8 @@ remain separate implementation issues.
 
 ## Build and checks
 
-Run `make ci` for formatting, vet, race-enabled tests, the Linux ARM64 Lambda
-build, and vulnerability analysis of the resulting binary. `make build` writes
+Run `task ci` for formatting, vet, race-enabled tests, the Linux ARM64 Lambda
+build, and vulnerability analysis of the resulting binary. `task build` writes
 `dist/bootstrap` and `dist/bootstrap.zip`; generated artifacts are ignored by
 Git. The zip contains the executable `bootstrap` at its root for a Go custom
 runtime on `provided.al2023` with the ARM64 architecture.

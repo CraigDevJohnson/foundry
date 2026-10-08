@@ -101,9 +101,9 @@ cloud backups, session operations, live recovery, infrastructure and portfolio
 integration
 remain tracked in the [first-release backlog](https://github.com/CraigDevJohnson/foundry/issues/2).
 
-Use Go 1.27.1 or newer and run `make ci` for formatting, vet, race-enabled tests,
-a Linux ARM64 Lambda build, and vulnerability checks. `make build` produces
-`dist/bootstrap.zip`. See the [status reference](docs/status-api.md) for required
+Use Go 1.27.1 or newer and [Task](https://taskfile.dev) 3.x, and run `task ci`
+for formatting, vet, race-enabled tests, a Linux ARM64 Lambda build, and
+vulnerability checks. `task build` produces `dist/bootstrap.zip`. See the [status reference](docs/status-api.md) for required
 configuration and local invocation.
 
 The OpenTofu root in `infra/` uses OpenTofu 1.12.x. CI runs `tofu fmt -check`
