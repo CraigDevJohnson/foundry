@@ -131,10 +131,15 @@ tasks:
     status:
       - test '{{.HOST_STATE}}' = stopped
     cmds:
+      # A host still starting is waited out, then shut down like a running one.
+      - cmd: |
+          if [ '{{.HOST_STATE}}' = pending ]; then
+            aws ec2 wait instance-running --region {{.AWS_REGION}} --instance-ids {{.INSTANCE_ID}} || exit 1
+          fi
       - task: host:shutdown-foundry
         vars:
           INSTANCE_ID: '{{.INSTANCE_ID}}'
-          HOST_STATE: '{{.HOST_STATE}}'
+          HOST_STATE: '{{if eq .HOST_STATE "pending"}}running{{else}}{{.HOST_STATE}}{{end}}'
       - aws ec2 stop-instances --region {{.AWS_REGION}} --instance-ids {{.INSTANCE_ID}} --output text
       - aws ec2 wait instance-stopped --region {{.AWS_REGION}} --instance-ids {{.INSTANCE_ID}}
       - echo 'Host {{.INSTANCE_ID}} is stopped'
