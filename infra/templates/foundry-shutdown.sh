@@ -32,13 +32,18 @@ foundry_writers() {
   for dir in /proc/[0-9]*; do
     pid=${dir#/proc/}
     [ "$pid" = "$$" ] || [ "$pid" = "$BASHPID" ] && continue
-    if ! cmdline=$(tr '\0' ' ' 2>/dev/null <"$dir/cmdline") ||
-      ! cwd=$(readlink "$dir/cwd" 2>/dev/null); then
+    if ! cmdline=$(tr '\0' ' ' 2>/dev/null <"$dir/cmdline"); then
       [ -d "$dir" ] || continue
       echo "Cannot inspect process $pid" >&2
       return 2
     fi
-    [ -n "$cmdline" ] || continue # kernel thread
+    # Kernel threads and zombies have an empty command line and can't write.
+    [ -n "$cmdline" ] || continue
+    if ! cwd=$(readlink "$dir/cwd" 2>/dev/null); then
+      [ -d "$dir" ] || continue
+      echo "Cannot inspect process $pid" >&2
+      return 2
+    fi
     case "$cwd" in
       /foundry | /foundry/*) echo "$pid $cmdline (in $cwd)"; continue ;;
     esac
