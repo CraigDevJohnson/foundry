@@ -23,29 +23,43 @@ if ! systemctl stop foundry.service; then
 fi
 
 # Prints the PIDs of processes that could still be writing Foundry data: any
-# working directory under /foundry, or a command line naming foundryvtt,
-# /foundry or --dataPath. That covers relative launches such as `node main.js`
-# from /foundry/foundryvtt, which systemd and a path match would both miss.
-# Returns 2 if a live process can't be inspected.
+# working directory under /foundry, an executable named foundry or foundryvtt
+# or under a foundryvtt directory, or a command line naming foundryvtt,
+# /foundry/ or --dataPath. That covers relative launches such as
+# `node main.js` from /foundry/foundryvtt and renamed argv[0], which systemd
+# and a path match would both miss. Returns 2 if a live process can't be
+# inspected.
 foundry_writers() {
-  local dir pid cwd cmdline
+  local dir pid stat fields state flags cwd exe cmdline
   for dir in /proc/[0-9]*; do
     pid=${dir#/proc/}
     [ "$pid" = "$$" ] || [ "$pid" = "$BASHPID" ] && continue
-    if ! cmdline=$(tr '\0' ' ' 2>/dev/null <"$dir/cmdline"); then
+    # Zombies have exited and kernel threads (PF_KTHREAD) can't write files.
+    if ! stat=$(cat "$dir/stat" 2>/dev/null); then
       [ -d "$dir" ] || continue
       echo "Cannot inspect process $pid" >&2
       return 2
     fi
-    # Kernel threads and zombies have an empty command line and can't write.
-    [ -n "$cmdline" ] || continue
-    if ! cwd=$(readlink "$dir/cwd" 2>/dev/null); then
+    read -r -a fields <<<"${stat##*) }"
+    state=${fields[0]}
+    flags=${fields[6]}
+    case "$state" in Z | X | x) continue ;; esac
+    (( flags & 0x00200000 )) && continue
+    if ! cmdline=$(tr '\0' ' ' 2>/dev/null <"$dir/cmdline") ||
+      ! cwd=$(readlink "$dir/cwd" 2>/dev/null) ||
+      ! exe=$(readlink "$dir/exe" 2>/dev/null) ||
+      [ -z "$cmdline" ]; then
       [ -d "$dir" ] || continue
       echo "Cannot inspect process $pid" >&2
       return 2
     fi
+    cwd=${cwd% (deleted)}
+    exe=${exe% (deleted)}
     case "$cwd" in
       /foundry | /foundry/*) echo "$pid $cmdline (in $cwd)"; continue ;;
+    esac
+    case "${exe,,}" in
+      */foundry | */foundryvtt | */foundryvtt/* | /foundry/*) echo "$pid $cmdline ($exe)"; continue ;;
     esac
     case "$cmdline" in
       *[Ff]oundry[Vv][Tt][Tt]* | */foundry/* | *--dataPath*) echo "$pid $cmdline" ;;
@@ -76,8 +90,10 @@ if [ "$gone" != true ]; then
   exit 1
 fi
 
-if ! sync; then
-  echo "sync failed; leaving the host running" >&2
+# Plain sync(2) always reports success; syncfs(2) on the data volume reports
+# writeback errors.
+if ! sync -f /foundry; then
+  echo "sync of /foundry failed; leaving the host running" >&2
   exit 1
 fi
 
