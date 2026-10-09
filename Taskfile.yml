@@ -90,11 +90,20 @@ tasks:
     preconditions: *one-host
     cmds:
       # A running host still gets the readiness check: Foundry may be down.
+      # StartInstances needs a stopped host, so a host mid-start or mid-stop is
+      # waited out first.
       - cmd: |
-          if [ '{{.HOST_STATE}}' != running ]; then
-            aws ec2 start-instances --region {{.AWS_REGION}} --instance-ids {{.INSTANCE_ID}} --output text &&
-              aws ec2 wait instance-running --region {{.AWS_REGION}} --instance-ids {{.INSTANCE_ID}} || exit 1
-          fi
+          case '{{.HOST_STATE}}' in
+            running | pending) ;;
+            stopping)
+              aws ec2 wait instance-stopped --region {{.AWS_REGION}} --instance-ids {{.INSTANCE_ID}} || exit 1
+              aws ec2 start-instances --region {{.AWS_REGION}} --instance-ids {{.INSTANCE_ID}} --output text || exit 1
+              ;;
+            *)
+              aws ec2 start-instances --region {{.AWS_REGION}} --instance-ids {{.INSTANCE_ID}} --output text || exit 1
+              ;;
+          esac
+          aws ec2 wait instance-running --region {{.AWS_REGION}} --instance-ids {{.INSTANCE_ID}} || exit 1
       - cmd: |
           deadline=$(( $(date +%s) + 300 ))
           while [ "$(date +%s)" -lt "$deadline" ]; do
