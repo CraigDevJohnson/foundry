@@ -22,24 +22,52 @@ if ! systemctl stop foundry.service; then
   exit 1
 fi
 
-# pgrep exits 1 when nothing matches; any other non-zero status means it
-# could not check, which must not pass for "stopped".
+# Prints the PIDs of processes that could still be writing Foundry data: any
+# working directory under /foundry, or a command line naming foundryvtt,
+# /foundry or --dataPath. That covers relative launches such as `node main.js`
+# from /foundry/foundryvtt, which systemd and a path match would both miss.
+# Returns 2 if a live process can't be inspected.
+foundry_writers() {
+  local dir pid cwd cmdline
+  for dir in /proc/[0-9]*; do
+    pid=${dir#/proc/}
+    [ "$pid" = "$$" ] || [ "$pid" = "$BASHPID" ] && continue
+    if ! cmdline=$(tr '\0' ' ' 2>/dev/null <"$dir/cmdline") ||
+      ! cwd=$(readlink "$dir/cwd" 2>/dev/null); then
+      [ -d "$dir" ] || continue
+      echo "Cannot inspect process $pid" >&2
+      return 2
+    fi
+    [ -n "$cmdline" ] || continue # kernel thread
+    case "$cwd" in
+      /foundry | /foundry/*) echo "$pid $cmdline (in $cwd)"; continue ;;
+    esac
+    case "$cmdline" in
+      *[Ff]oundry[Vv][Tt][Tt]* | */foundry/* | *--dataPath*) echo "$pid $cmdline" ;;
+    esac
+  done
+}
+
 gone=false
 for _ in $(seq 1 90); do
-  pgrep -f /foundry/foundryvtt/main.js >/dev/null
-  rc=$?
-  if [ "$rc" -eq 1 ]; then
+  if ! writers=$(foundry_writers); then
+    echo "Could not check for Foundry processes; leaving the host running" >&2
+    exit 1
+  fi
+  if ! listeners=$(ss -H -ltn 'sport = :30000'); then
+    echo "Could not check port 30000; leaving the host running" >&2
+    exit 1
+  fi
+  if [ -z "$writers" ] && [ -z "$listeners" ]; then
     gone=true
     break
-  elif [ "$rc" -ne 0 ]; then
-    echo "pgrep failed with status $rc; leaving the host running" >&2
-    exit 1
   fi
   sleep 1
 done
 if [ "$gone" != true ]; then
   echo "Foundry is still running; leaving the host running" >&2
-  pgrep -af /foundry/foundryvtt/main.js >&2
+  [ -z "$writers" ] || echo "$writers" >&2
+  [ -z "$listeners" ] || echo "Listening on port 30000: $listeners" >&2
   exit 1
 fi
 

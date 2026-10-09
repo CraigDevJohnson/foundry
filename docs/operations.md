@@ -54,12 +54,17 @@ AWS_PROFILE=workloads-admin task host:stop        # shut Foundry down, then stop
 `host:stop` first runs `/foundry/stop_foundry.sh` through Run Command, using
 the parameterless `foundry-shutdown` document
 (`infra/templates/foundry-shutdown.sh`), then `systemctl stop foundry.service`, and
-checks that no `/foundry/foundryvtt/main.js` process is left. If the script is
-missing, the service stop or `sync` fails, or Foundry is still running, it leaves the host
+checks for 90 seconds that nothing listens on port 30000 and no process runs
+in `/foundry` or names `foundryvtt`, `/foundry/` or `--dataPath` (which also
+catches relative launches such as `node main.js`). If the script is missing,
+the service stop or `sync` fails, a process can't be inspected, or Foundry is
+still running, it leaves the host
 running and exits non-zero. A failing script alone doesn't stop it, since the
 service stop and the process check decide. Stopping disconnects everyone, so
 check that nobody is playing first. `host:stop` does nothing if the host is
-already stopped; `host:start` on a running host only waits for Foundry. `foundry.service` is enabled, so Foundry starts
+already stopped, and only waits if it is already stopping; on a host that is
+still starting it waits for it to boot, then shuts down as usual.
+`host:start` on a running host only waits for Foundry. `foundry.service` is enabled, so Foundry starts
 with the host.
 
 The **Host control** workflow in GitHub Actions runs the same tasks. Start it

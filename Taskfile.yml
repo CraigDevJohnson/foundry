@@ -132,15 +132,20 @@ tasks:
       - test '{{.HOST_STATE}}' = stopped
     cmds:
       # A host still starting is waited out, then shut down like a running one.
+      # A host already stopping (say, a retry after an interrupted stop) only
+      # needs the wait.
       - cmd: |
           if [ '{{.HOST_STATE}}' = pending ]; then
             aws ec2 wait instance-running --region {{.AWS_REGION}} --instance-ids {{.INSTANCE_ID}} || exit 1
           fi
+        if: test '{{.HOST_STATE}}' != stopping
       - task: host:shutdown-foundry
+        if: test '{{.HOST_STATE}}' != stopping
         vars:
           INSTANCE_ID: '{{.INSTANCE_ID}}'
           HOST_STATE: '{{if eq .HOST_STATE "pending"}}running{{else}}{{.HOST_STATE}}{{end}}'
-      - aws ec2 stop-instances --region {{.AWS_REGION}} --instance-ids {{.INSTANCE_ID}} --output text
+      - cmd: aws ec2 stop-instances --region {{.AWS_REGION}} --instance-ids {{.INSTANCE_ID}} --output text
+        if: test '{{.HOST_STATE}}' != stopping
       - aws ec2 wait instance-stopped --region {{.AWS_REGION}} --instance-ids {{.INSTANCE_ID}}
       - echo 'Host {{.INSTANCE_ID}} is stopped'
 
@@ -153,11 +158,26 @@ tasks:
         msg: 'Host {{.INSTANCE_ID}} is {{.HOST_STATE}}; Foundry can only be shut down while it is running'
     cmds:
       - cmd: |
-          if ! command_id=$(aws ssm send-command --region {{.AWS_REGION}} \
-            --instance-ids {{.INSTANCE_ID}} --document-name foundry-shutdown \
-            --document-version '$LATEST' \
-            --comment 'Shut down Foundry before stopping the host' \
-            --query Command.CommandId --output text) || [ -z "$command_id" ]; then
+          # A host that has just booted may not have registered with SSM yet,
+          # which SendCommand reports as InvalidInstanceId. Retry that for up
+          # to two minutes; fail at once on anything else.
+          err=$(mktemp)
+          trap 'rm -f "$err"' EXIT
+          command_id=
+          for i in $(seq 1 24); do
+            if command_id=$(aws ssm send-command --region {{.AWS_REGION}} \
+              --instance-ids {{.INSTANCE_ID}} --document-name foundry-shutdown \
+              --document-version '$LATEST' \
+              --comment 'Shut down Foundry before stopping the host' \
+              --query Command.CommandId --output text 2>"$err"); then
+              break
+            fi
+            command_id=
+            grep -q InvalidInstanceId "$err" || break
+            sleep 5
+          done
+          if [ -z "$command_id" ]; then
+            cat "$err" >&2
             echo 'Could not send the Foundry shutdown; the host is still running' >&2
             exit 1
           fi
