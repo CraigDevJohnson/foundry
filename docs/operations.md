@@ -39,6 +39,40 @@ aws ssm get-command-invocation --profile workloads-admin \
   --query '[Status,StandardOutputContent]' --output text
 ```
 
+## Start and stop
+
+The Taskfile's host tasks find the host by its `Name=foundry` and
+`project=foundry` tags, so they keep working after a rebuild. Locally they use
+the AWS profile in the environment:
+
+```sh
+AWS_PROFILE=workloads-readonly task host:status   # instance state and whether Foundry answers
+AWS_PROFILE=workloads-admin task host:start       # start, then wait up to 5 minutes for Foundry
+AWS_PROFILE=workloads-admin task host:stop        # shut Foundry down, then stop the instance
+```
+
+`host:stop` first runs `/foundry/stop_foundry.sh` through Run Command
+(`host/ssm/shutdown-foundry.json`), then `systemctl stop foundry.service`, and
+checks that no `/foundry/foundryvtt/main.js` process is left. If the script is
+missing, the command fails, or Foundry is still running, it leaves the host
+running and exits non-zero. A failing script alone doesn't stop it, since the
+service stop and the process check decide. Stopping disconnects everyone, so
+check that nobody is playing first. Both tasks do nothing if the host is
+already in the requested state. `foundry.service` is enabled, so Foundry starts
+with the host.
+
+The **Host control** workflow in GitHub Actions runs the same tasks. Start it
+from the Actions tab, pick `status`, `start` or `stop`, and for `stop` tick
+**nobody playing**. It runs in the `foundry-host` GitHub Environment and
+assumes `foundry-host-control-ci` (`infra/ci.tf`) through the workloads GitHub
+OIDC provider. The role can only describe instances, start and stop this
+instance, and run `AWS-RunShellScript` on it. Setup, once the role is applied:
+
+1. Create the `foundry-host` environment under the repository's
+   Settings > Environments, optionally with Craig as required reviewer.
+2. Add the variable `AWS_HOST_CONTROL_ROLE_ARN` with the value of
+   `tofu -chdir=infra output -raw host_control_role_arn`.
+
 ## DNS
 
 Cloudflare holds `foundry.craigdevjohnson.com` as an A record for

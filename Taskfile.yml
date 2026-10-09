@@ -3,6 +3,16 @@ version: '3'
 vars:
   GO: '{{.GO | default "go"}}'
   GOVULNCHECK_VERSION: v1.7.0
+  AWS_REGION: us-west-2
+  FOUNDRY_URL: https://foundry.craigdevjohnson.com:30000
+  # The host is found by its tags, so a rebuild needs no change here. The AWS
+  # CLI takes credentials from the environment, for example
+  # AWS_PROFILE=workloads-admin locally or the OIDC role in GitHub Actions.
+  FIND_HOST: >-
+    aws ec2 describe-instances --region {{.AWS_REGION}}
+    --filters Name=tag:Name,Values=foundry Name=tag:project,Values=foundry
+    Name=instance-state-name,Values=pending,running,stopping,stopped
+    --query 'Reservations[].Instances[].InstanceId' --output text
 
 tasks:
   default:
@@ -52,3 +62,102 @@ tasks:
     deps: [build]
     cmds:
       - '{{.GO}} run golang.org/x/vuln/cmd/govulncheck@{{.GOVULNCHECK_VERSION}} -mode=binary dist/bootstrap'
+
+  host:status:
+    desc: Show the host's state and whether Foundry answers
+    vars: &host-vars
+      INSTANCE_ID:
+        sh: '{{.FIND_HOST}}'
+      HOST_STATE:
+        sh: >-
+          aws ec2 describe-instances --region {{.AWS_REGION}} --instance-ids {{.INSTANCE_ID}}
+          --query 'Reservations[0].Instances[0].State.Name' --output text
+    preconditions: &one-host
+      - sh: test "$(echo '{{.INSTANCE_ID}}' | wc -w)" -eq 1
+        msg: 'Expected exactly one host tagged Name=foundry and project=foundry, found "{{.INSTANCE_ID}}"'
+    cmds:
+      - echo 'Host {{.INSTANCE_ID}} is {{.HOST_STATE}}'
+      - cmd: |
+          if [ '{{.HOST_STATE}}' = running ]; then
+            code=$(curl -sS -o /dev/null -w '%{http_code}' --max-time 10 '{{.FOUNDRY_URL}}/' || true)
+            echo "Foundry at {{.FOUNDRY_URL}} answered HTTP ${code:-none}"
+          fi
+        silent: true
+
+  host:start:
+    desc: Start the host and wait until Foundry answers
+    vars: *host-vars
+    preconditions: *one-host
+    status:
+      - test '{{.HOST_STATE}}' = running
+    cmds:
+      - aws ec2 start-instances --region {{.AWS_REGION}} --instance-ids {{.INSTANCE_ID}} --output text
+      - aws ec2 wait instance-running --region {{.AWS_REGION}} --instance-ids {{.INSTANCE_ID}}
+      - cmd: |
+          for i in $(seq 1 60); do
+            if curl -fsS -o /dev/null --max-time 10 '{{.FOUNDRY_URL}}/' 2>/dev/null; then
+              echo 'Foundry is up at {{.FOUNDRY_URL}}'
+              exit 0
+            fi
+            sleep 5
+          done
+          echo 'The host is running, but Foundry did not answer within 5 minutes' >&2
+          exit 1
+        silent: true
+
+  host:stop:
+    desc: Shut Foundry down with /foundry/stop_foundry.sh, then stop the host
+    summary: |
+      Shut Foundry down safely, then stop the host.
+
+      Runs /foundry/stop_foundry.sh on the host through SSM Run Command, then
+      stops foundry.service and checks that no Foundry process is left. If any
+      of that fails, the host is left running. Make sure nobody is playing
+      first: this disconnects everyone.
+    vars: *host-vars
+    preconditions: *one-host
+    status:
+      - test '{{.HOST_STATE}}' = stopped
+    cmds:
+      - task: host:shutdown-foundry
+        vars:
+          INSTANCE_ID: '{{.INSTANCE_ID}}'
+          HOST_STATE: '{{.HOST_STATE}}'
+      - aws ec2 stop-instances --region {{.AWS_REGION}} --instance-ids {{.INSTANCE_ID}} --output text
+      - aws ec2 wait instance-stopped --region {{.AWS_REGION}} --instance-ids {{.INSTANCE_ID}}
+      - echo 'Host {{.INSTANCE_ID}} is stopped'
+
+  host:shutdown-foundry:
+    internal: true
+    requires:
+      vars: [INSTANCE_ID, HOST_STATE]
+    preconditions:
+      - sh: test '{{.HOST_STATE}}' = running
+        msg: 'Host {{.INSTANCE_ID}} is {{.HOST_STATE}}; Foundry can only be shut down while it is running'
+    cmds:
+      - cmd: |
+          command_id=$(aws ssm send-command --region {{.AWS_REGION}} \
+            --instance-ids {{.INSTANCE_ID}} --document-name AWS-RunShellScript \
+            --comment 'Shut down Foundry before stopping the host' \
+            --parameters 'file://{{.ROOT_DIR}}/host/ssm/shutdown-foundry.json' \
+            --query Command.CommandId --output text)
+          echo "Shutting down Foundry (command $command_id)"
+          status=Pending
+          for i in $(seq 1 80); do
+            sleep 5
+            status=$(aws ssm get-command-invocation --region {{.AWS_REGION}} \
+              --instance-id {{.INSTANCE_ID}} --command-id "$command_id" \
+              --query Status --output text 2>/dev/null || echo Pending)
+            case "$status" in
+              Pending | InProgress | Delayed) ;;
+              *) break ;;
+            esac
+          done
+          aws ssm get-command-invocation --region {{.AWS_REGION}} \
+            --instance-id {{.INSTANCE_ID}} --command-id "$command_id" \
+            --query '[StandardOutputContent, StandardErrorContent]' --output text || true
+          if [ "$status" != Success ]; then
+            echo "Foundry shutdown ended with status $status; the host is still running" >&2
+            exit 1
+          fi
+        silent: true

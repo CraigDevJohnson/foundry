@@ -38,6 +38,12 @@ mock_provider "aws" {
       id = "vol-0123456789abcdef0"
     }
   }
+
+  mock_data "aws_iam_openid_connect_provider" {
+    defaults = {
+      arn = "arn:aws:iam::793680745829:oidc-provider/token.actions.githubusercontent.com"
+    }
+  }
 }
 
 run "state_bucket_is_tls_only" {
@@ -265,5 +271,37 @@ run "status_alarm_targets_workloads_alerts" {
       aws_cloudwatch_metric_alarm.host_status_check.alarm_actions == toset(["arn:aws:sns:us-west-2:793680745829:alerts"])
     )
     error_message = "D18: the StatusCheckFailed alarm notifies the workloads alerts topic."
+  }
+}
+
+# --- GitHub Actions host control ---
+
+run "host_control_role_trusts_only_the_environment" {
+  command = plan
+
+  assert {
+    condition = jsonencode({
+      for c in data.aws_iam_policy_document.host_control_trust.statement[0].condition : c.variable => [c.test, c.values]
+      }) == jsonencode({
+      "token.actions.githubusercontent.com:aud" = ["StringEquals", ["sts.amazonaws.com"]]
+      "token.actions.githubusercontent.com:sub" = ["StringEquals", ["repo:CraigDevJohnson/foundry:environment:foundry-host"]]
+    })
+    error_message = "The host control role must require the STS audience and pin sub to the foundry-host environment."
+  }
+
+  assert {
+    condition = alltrue([
+      for s in data.aws_iam_policy_document.host_control.statement :
+      s.resources == toset(["*"]) ? s.actions == toset(["ec2:DescribeInstances"]) || s.actions == toset(["ssm:GetCommandInvocation"]) : true
+    ])
+    error_message = "Only the read actions without resource-level permissions may use a * resource."
+  }
+
+  assert {
+    condition = contains(
+      flatten([for s in data.aws_iam_policy_document.host_control.statement : tolist(s.resources) if contains(tolist(s.actions), "ssm:SendCommand")]),
+      "arn:aws:ssm:us-west-2::document/AWS-RunShellScript",
+    )
+    error_message = "SendCommand must be limited to the AWS-RunShellScript document."
   }
 }

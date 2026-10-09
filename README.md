@@ -56,7 +56,8 @@ management plane is relied upon.
 ## Project documentation
 
 - [Domain glossary](CONTEXT.md) defines the project's terms.
-- [Operations](docs/operations.md) covers running the workloads host: DNS,
+- [Operations](docs/operations.md) covers running the workloads host: start
+  and stop (`task host:start`, `task host:stop` and the Host control workflow), DNS,
   certificate renewal, snapshots, restores, the license and the move record.
 - [Hosting baseline](docs/hosting-baseline.md) is historical: the old
   management-account host and related management tools as found in discovery.
