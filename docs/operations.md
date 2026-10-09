@@ -39,6 +39,58 @@ aws ssm get-command-invocation --profile workloads-admin \
   --query '[Status,StandardOutputContent]' --output text
 ```
 
+## Start and stop
+
+These are plain host start and stop, not the Start session and End session
+actions in [CONTEXT.md](../CONTEXT.md): stop takes no session backup, so the
+latest recovery point is the last scheduled snapshot. End session, which backs
+up first and keeps the host running if the backup fails, is separate work.
+
+The Taskfile's host tasks find the host by its `Name=foundry` and
+`project=foundry` tags, so they keep working after a rebuild. Locally they use
+the AWS profile in the environment:
+
+```sh
+AWS_PROFILE=workloads-readonly task host:status   # instance state and whether Foundry answers
+AWS_PROFILE=workloads-admin task host:start       # start, then wait up to 5 minutes for Foundry
+AWS_PROFILE=workloads-admin task host:stop        # shut Foundry down, then stop the instance
+```
+
+`host:stop` first runs `/foundry/stop_foundry.sh` through Run Command, using
+the parameterless `foundry-shutdown` document
+(`infra/templates/foundry-shutdown.sh`), then `systemctl stop foundry.service`, and
+checks for 90 seconds that nothing listens on port 30000 and no live process
+runs in `/foundry`, runs a `foundry` or `foundryvtt` executable, or names
+`foundryvtt`, `/foundry/` or `--dataPath` (which also catches relative launches
+such as `node main.js`). It then flushes the data volume with `sync -f`, which
+reports writeback errors. If the script is missing, the service stop or the
+flush fails, a process can't be inspected, or Foundry is still running, it
+leaves the host
+running and exits non-zero. A failing script alone doesn't stop it, since the
+service stop and the process check decide. Stopping disconnects everyone, so
+check that nobody is playing first. `host:stop` does nothing if the host is
+already stopped, and only waits if it is already stopping; on a host that is
+still starting it waits for it to boot, then shuts down as usual.
+`host:start` on a running host only waits for Foundry. `foundry.service` is enabled, so Foundry starts
+with the host.
+
+The **Host control** workflow in GitHub Actions runs the same tasks. Start it
+from the Actions tab, pick `status`, `start` or `stop`, and for `stop` tick
+**nobody playing**. It runs in the `foundry-host` GitHub Environment and
+assumes `foundry-host-control-ci` (`infra/ci.tf`) through the workloads GitHub
+OIDC provider. The role can only describe instances, start and stop this
+instance, and run the `foundry-shutdown` document on it, never arbitrary
+commands. Setup, once the role is applied:
+
+1. Create the `foundry-host` environment under the repository's
+   Settings > Environments. Set **Deployment branches** to `main` only: the
+   role's trust policy pins the environment, not the branch, so this rule is
+   what keeps a workflow from another branch from getting the role. No
+   required reviewers: runs start without an approval step (Craig's call,
+   2026-10-09).
+2. Add the variable `AWS_HOST_CONTROL_ROLE_ARN` with the value of
+   `tofu -chdir=infra output -raw host_control_role_arn`.
+
 ## DNS
 
 Cloudflare holds `foundry.craigdevjohnson.com` as an A record for

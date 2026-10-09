@@ -1,0 +1,126 @@
+# The GitHub Actions role that starts and stops the host (aws-design §5.6):
+# the Host control workflow assumes it through the workloads GitHub OIDC
+# provider, which aws-setup owns. It can start and stop only this instance, and
+# the only command it can run there is the parameterless foundry-shutdown
+# document, so it can't run arbitrary shell as root on the host.
+
+locals {
+  # GitHub's immutable OIDC subject: the repository was created on 2026-09-08,
+  # after the 2026-07-15 cutover, so `sub` carries the owner and repository IDs
+  # (owner@id/repo@id) rather than the bare names. A transfer or rename keeps
+  # this form; the IDs never change.
+  github_repository = "CraigDevJohnson@42454849/foundry@1361164956"
+
+  # The workflow's GitHub Environment. The trust policy pins `sub` to it, so
+  # only jobs in that environment can assume the role, and its protection
+  # rules (required reviewers, deployment branches) apply to every run.
+  host_control_environment = "foundry-host"
+}
+
+# Runs templates/foundry-shutdown.sh as root. It has no parameters, so
+# SendCommand callers can't change what runs.
+resource "aws_ssm_document" "shutdown" {
+  name            = "foundry-shutdown"
+  document_type   = "Command"
+  document_format = "JSON"
+
+  content = jsonencode({
+    schemaVersion = "2.2"
+    description   = "Shut Foundry down with /foundry/stop_foundry.sh and systemd before the host stops"
+    mainSteps = [{
+      action = "aws:runShellScript"
+      name   = "shutdownFoundry"
+      inputs = {
+        timeoutSeconds = "300"
+        runCommand     = [file("${path.module}/templates/foundry-shutdown.sh")]
+      }
+    }]
+  })
+}
+
+data "aws_iam_openid_connect_provider" "github" {
+  url = "https://token.actions.githubusercontent.com"
+}
+
+data "aws_iam_policy_document" "host_control_trust" {
+  statement {
+    actions = ["sts:AssumeRoleWithWebIdentity"]
+
+    principals {
+      type        = "Federated"
+      identifiers = [data.aws_iam_openid_connect_provider.github.arn]
+    }
+
+    condition {
+      test     = "StringEquals"
+      variable = "token.actions.githubusercontent.com:aud"
+      values   = ["sts.amazonaws.com"]
+    }
+
+    condition {
+      test     = "StringEquals"
+      variable = "token.actions.githubusercontent.com:sub"
+      values   = ["repo:${local.github_repository}:environment:${local.host_control_environment}"]
+    }
+  }
+}
+
+resource "aws_iam_role" "host_control" {
+  name                  = "foundry-host-control-ci"
+  description           = "GitHub Actions: start, stop and shut down Foundry on the host"
+  assume_role_policy    = data.aws_iam_policy_document.host_control_trust.json
+  max_session_duration  = 3600
+  force_detach_policies = true
+}
+
+data "aws_iam_policy_document" "host_control" {
+  # Describe* has no resource-level permissions. The tasks find the host by
+  # its Name and project tags.
+  statement {
+    sid       = "FindHost"
+    actions   = ["ec2:DescribeInstances"]
+    resources = ["*"]
+  }
+
+  statement {
+    sid = "StartStopHost"
+    actions = [
+      "ec2:StartInstances",
+      "ec2:StopInstances",
+    ]
+    resources = [aws_instance.host.arn]
+  }
+
+  # SendCommand needs both the target instance and the document.
+  statement {
+    sid     = "ShutDownFoundry"
+    actions = ["ssm:SendCommand"]
+    resources = [
+      aws_instance.host.arn,
+      aws_ssm_document.shutdown.arn,
+    ]
+  }
+
+  # GetCommandInvocation has no resource-level permissions.
+  statement {
+    sid       = "ReadCommandResult"
+    actions   = ["ssm:GetCommandInvocation"]
+    resources = ["*"]
+  }
+}
+
+resource "aws_iam_role_policy" "host_control" {
+  name   = "foundry-host-control"
+  role   = aws_iam_role.host_control.id
+  policy = data.aws_iam_policy_document.host_control.json
+}
+
+resource "aws_iam_role_policies_exclusive" "host_control" {
+  role_name    = aws_iam_role.host_control.name
+  policy_names = [aws_iam_role_policy.host_control.name]
+}
+
+resource "aws_iam_role_policy_attachments_exclusive" "host_control" {
+  role_name   = aws_iam_role.host_control.name
+  policy_arns = []
+}

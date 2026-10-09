@@ -1,0 +1,70 @@
+name: Host control
+
+# Starts, stops or checks the Foundry host by running the Taskfile's host
+# tasks with the foundry-host-control-ci role (infra/ci.tf). Stop shuts
+# Foundry down with /foundry/stop_foundry.sh before stopping the instance.
+# Stop is not End session: it takes no session backup.
+
+on:
+  workflow_dispatch:
+    inputs:
+      action:
+        description: What to do with the host
+        type: choice
+        options: [status, start, stop]
+        default: status
+      nobody_playing:
+        description: For stop, confirm that nobody is playing or preparing
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+# One host operation at a time; a second run waits instead of cancelling one
+# in flight.
+concurrency:
+  group: foundry-host
+  cancel-in-progress: false
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  host:
+    name: Host ${{ inputs.action }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    # The role's trust policy accepts only jobs in this environment.
+    environment: foundry-host
+    permissions:
+      contents: read
+      id-token: write # assume the host control role through GitHub OIDC
+    steps:
+      - name: Require confirmation before stopping
+        if: inputs.action == 'stop' && !inputs.nobody_playing
+        run: |
+          echo "::error::Stopping disconnects everyone. Run again with 'nobody playing' checked."
+          exit 1
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Set up Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+          cache: false
+      - name: Install Task
+        run: go install github.com/go-task/task/v3/cmd/task@v3.54.0
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd # v6.3.0
+        with:
+          role-to-assume: ${{ vars.AWS_HOST_CONTROL_ROLE_ARN }}
+          role-session-name: foundry-host-${{ inputs.action }}-${{ github.run_id }}
+          aws-region: us-west-2
+      - name: Run host task
+        env:
+          ACTION: ${{ inputs.action }}
+        run: task "host:$ACTION"

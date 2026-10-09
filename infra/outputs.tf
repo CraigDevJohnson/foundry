@@ -30,3 +30,8 @@ output "security_group_id" {
   description = "The host security group."
   value       = aws_security_group.foundry.id
 }
+
+output "host_control_role_arn" {
+  description = "The role the Host control workflow assumes (GitHub variable AWS_HOST_CONTROL_ROLE_ARN)."
+  value       = aws_iam_role.host_control.arn
+}
