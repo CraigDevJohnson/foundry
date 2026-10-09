@@ -3,6 +3,7 @@ name: Host control
 # Starts, stops or checks the Foundry host by running the Taskfile's host
 # tasks with the foundry-host-control-ci role (infra/ci.tf). Stop shuts
 # Foundry down with /foundry/stop_foundry.sh before stopping the instance.
+# Stop is not End session: it takes no session backup.
 
 on:
   workflow_dispatch:

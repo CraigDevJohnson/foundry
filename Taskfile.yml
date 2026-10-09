@@ -126,6 +126,8 @@ tasks:
       stops foundry.service and checks that no Foundry process is left. If any
       of that fails, the host is left running. Make sure nobody is playing
       first: this disconnects everyone.
+
+      This is not End session: it takes no session backup.
     vars: *host-vars
     preconditions: *one-host
     status:

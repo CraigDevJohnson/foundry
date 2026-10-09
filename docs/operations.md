@@ -41,6 +41,11 @@ aws ssm get-command-invocation --profile workloads-admin \
 
 ## Start and stop
 
+These are plain host start and stop, not the Start session and End session
+actions in [CONTEXT.md](../CONTEXT.md): stop takes no session backup, so the
+latest recovery point is the last scheduled snapshot. End session, which backs
+up first and keeps the host running if the backup fails, is separate work.
+
 The Taskfile's host tasks find the host by its `Name=foundry` and
 `project=foundry` tags, so they keep working after a rebuild. Locally they use
 the AWS profile in the environment:
