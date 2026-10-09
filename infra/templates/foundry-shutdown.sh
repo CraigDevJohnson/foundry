@@ -30,7 +30,7 @@ fi
 # and a path match would both miss. Returns 2 if a live process can't be
 # inspected.
 foundry_writers() {
-  local dir pid stat fields state flags cwd exe cmdline
+  local dir pid stat fields state flags started cwd exe cmdline
   for dir in /proc/[0-9]*; do
     pid=${dir#/proc/}
     [ "$pid" = "$$" ] || [ "$pid" = "$BASHPID" ] && continue
@@ -43,6 +43,7 @@ foundry_writers() {
     read -r -a fields <<<"${stat##*) }"
     state=${fields[0]}
     flags=${fields[6]}
+    started=${fields[19]}
     case "$state" in Z | X | x) continue ;; esac
     (( flags & 0x00200000 )) && continue
     if ! cmdline=$(tr '\0' ' ' 2>/dev/null <"$dir/cmdline") ||
@@ -51,6 +52,18 @@ foundry_writers() {
       [ -z "$cmdline" ]; then
       [ -d "$dir" ] || continue
       echo "Cannot inspect process $pid" >&2
+      return 2
+    fi
+    # A PID reused mid-scan would pair one process's stat with another's
+    # paths, so the start time must not have changed.
+    if ! stat=$(cat "$dir/stat" 2>/dev/null); then
+      [ -d "$dir" ] || continue
+      echo "Cannot inspect process $pid" >&2
+      return 2
+    fi
+    read -r -a fields <<<"${stat##*) }"
+    if [ "${fields[19]}" != "$started" ]; then
+      echo "Process $pid changed during inspection" >&2
       return 2
     fi
     cwd=${cwd% (deleted)}
