@@ -58,8 +58,8 @@ checks that no `/foundry/foundryvtt/main.js` process is left. If the script is
 missing, the service stop or `sync` fails, or Foundry is still running, it leaves the host
 running and exits non-zero. A failing script alone doesn't stop it, since the
 service stop and the process check decide. Stopping disconnects everyone, so
-check that nobody is playing first. Both tasks do nothing if the host is
-already in the requested state. `foundry.service` is enabled, so Foundry starts
+check that nobody is playing first. `host:stop` does nothing if the host is
+already stopped; `host:start` on a running host only waits for Foundry. `foundry.service` is enabled, so Foundry starts
 with the host.
 
 The **Host control** workflow in GitHub Actions runs the same tasks. Start it
