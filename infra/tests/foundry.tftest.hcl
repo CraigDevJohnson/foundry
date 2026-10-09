@@ -39,6 +39,12 @@ mock_provider "aws" {
     }
   }
 
+  mock_resource "aws_ssm_document" {
+    defaults = {
+      arn = "arn:aws:ssm:us-west-2:793680745829:document/foundry-shutdown"
+    }
+  }
+
   mock_data "aws_iam_openid_connect_provider" {
     defaults = {
       arn = "arn:aws:iam::793680745829:oidc-provider/token.actions.githubusercontent.com"
@@ -298,10 +304,18 @@ run "host_control_role_trusts_only_the_environment" {
   }
 
   assert {
-    condition = contains(
-      flatten([for s in data.aws_iam_policy_document.host_control.statement : tolist(s.resources) if contains(tolist(s.actions), "ssm:SendCommand")]),
-      "arn:aws:ssm:us-west-2::document/AWS-RunShellScript",
+    condition = alltrue([
+      for r in flatten([for s in data.aws_iam_policy_document.host_control.statement : tolist(s.resources) if contains(tolist(s.actions), "ssm:SendCommand")]) :
+      !strcontains(r, ":document/") || r == "arn:aws:ssm:us-west-2:793680745829:document/foundry-shutdown"
+    ])
+    error_message = "SendCommand may use only the foundry-shutdown document, never AWS-RunShellScript."
+  }
+
+  assert {
+    condition = (
+      aws_ssm_document.shutdown.document_type == "Command" &&
+      !strcontains(aws_ssm_document.shutdown.content, "\"parameters\"")
     )
-    error_message = "SendCommand must be limited to the AWS-RunShellScript document."
+    error_message = "foundry-shutdown must be a Command document with no parameters."
   }
 }

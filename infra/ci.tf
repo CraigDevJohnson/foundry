@@ -1,7 +1,8 @@
 # The GitHub Actions role that starts and stops the host (aws-design §5.6):
 # the Host control workflow assumes it through the workloads GitHub OIDC
-# provider, which aws-setup owns. It can start and stop only this instance and
-# run commands on it only through AWS-RunShellScript.
+# provider, which aws-setup owns. It can start and stop only this instance, and
+# the only command it can run there is the parameterless foundry-shutdown
+# document, so it can't run arbitrary shell as root on the host.
 
 locals {
   github_repository = "CraigDevJohnson/foundry"
@@ -10,9 +11,27 @@ locals {
   # only jobs in that environment can assume the role, and its protection
   # rules (required reviewers, deployment branches) apply to every run.
   host_control_environment = "foundry-host"
+}
 
-  # The AWS managed document; it has no owner account in its ARN.
-  run_shell_script_document_arn = "arn:aws:ssm:${local.region}::document/AWS-RunShellScript"
+# Runs templates/foundry-shutdown.sh as root. It has no parameters, so
+# SendCommand callers can't change what runs.
+resource "aws_ssm_document" "shutdown" {
+  name            = "foundry-shutdown"
+  document_type   = "Command"
+  document_format = "JSON"
+
+  content = jsonencode({
+    schemaVersion = "2.2"
+    description   = "Shut Foundry down with /foundry/stop_foundry.sh and systemd before the host stops"
+    mainSteps = [{
+      action = "aws:runShellScript"
+      name   = "shutdownFoundry"
+      inputs = {
+        timeoutSeconds = "300"
+        runCommand     = [file("${path.module}/templates/foundry-shutdown.sh")]
+      }
+    }]
+  })
 }
 
 data "aws_iam_openid_connect_provider" "github" {
@@ -74,7 +93,7 @@ data "aws_iam_policy_document" "host_control" {
     actions = ["ssm:SendCommand"]
     resources = [
       aws_instance.host.arn,
-      local.run_shell_script_document_arn,
+      aws_ssm_document.shutdown.arn,
     ]
   }
 

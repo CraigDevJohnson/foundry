@@ -94,7 +94,8 @@ tasks:
       - aws ec2 start-instances --region {{.AWS_REGION}} --instance-ids {{.INSTANCE_ID}} --output text
       - aws ec2 wait instance-running --region {{.AWS_REGION}} --instance-ids {{.INSTANCE_ID}}
       - cmd: |
-          for i in $(seq 1 60); do
+          deadline=$(( $(date +%s) + 300 ))
+          while [ "$(date +%s)" -lt "$deadline" ]; do
             if curl -fsS -o /dev/null --max-time 10 '{{.FOUNDRY_URL}}/' 2>/dev/null; then
               echo 'Foundry is up at {{.FOUNDRY_URL}}'
               exit 0
@@ -137,9 +138,8 @@ tasks:
     cmds:
       - cmd: |
           command_id=$(aws ssm send-command --region {{.AWS_REGION}} \
-            --instance-ids {{.INSTANCE_ID}} --document-name AWS-RunShellScript \
+            --instance-ids {{.INSTANCE_ID}} --document-name foundry-shutdown \
             --comment 'Shut down Foundry before stopping the host' \
-            --parameters 'file://{{.ROOT_DIR}}/host/ssm/shutdown-foundry.json' \
             --query Command.CommandId --output text)
           echo "Shutting down Foundry (command $command_id)"
           status=Pending

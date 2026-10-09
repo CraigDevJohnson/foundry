@@ -51,10 +51,11 @@ AWS_PROFILE=workloads-admin task host:start       # start, then wait up to 5 min
 AWS_PROFILE=workloads-admin task host:stop        # shut Foundry down, then stop the instance
 ```
 
-`host:stop` first runs `/foundry/stop_foundry.sh` through Run Command
-(`host/ssm/shutdown-foundry.json`), then `systemctl stop foundry.service`, and
+`host:stop` first runs `/foundry/stop_foundry.sh` through Run Command, using
+the parameterless `foundry-shutdown` document
+(`infra/templates/foundry-shutdown.sh`), then `systemctl stop foundry.service`, and
 checks that no `/foundry/foundryvtt/main.js` process is left. If the script is
-missing, the command fails, or Foundry is still running, it leaves the host
+missing, the service stop or `sync` fails, or Foundry is still running, it leaves the host
 running and exits non-zero. A failing script alone doesn't stop it, since the
 service stop and the process check decide. Stopping disconnects everyone, so
 check that nobody is playing first. Both tasks do nothing if the host is
@@ -66,7 +67,8 @@ from the Actions tab, pick `status`, `start` or `stop`, and for `stop` tick
 **nobody playing**. It runs in the `foundry-host` GitHub Environment and
 assumes `foundry-host-control-ci` (`infra/ci.tf`) through the workloads GitHub
 OIDC provider. The role can only describe instances, start and stop this
-instance, and run `AWS-RunShellScript` on it. Setup, once the role is applied:
+instance, and run the `foundry-shutdown` document on it, never arbitrary
+commands. Setup, once the role is applied:
 
 1. Create the `foundry-host` environment under the repository's
    Settings > Environments, optionally with Craig as required reviewer.
