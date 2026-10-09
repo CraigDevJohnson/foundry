@@ -290,9 +290,9 @@ run "host_control_role_trusts_only_the_environment" {
       for c in data.aws_iam_policy_document.host_control_trust.statement[0].condition : c.variable => [c.test, c.values]
       }) == jsonencode({
       "token.actions.githubusercontent.com:aud" = ["StringEquals", ["sts.amazonaws.com"]]
-      "token.actions.githubusercontent.com:sub" = ["StringEquals", ["repo:CraigDevJohnson/foundry:environment:foundry-host"]]
+      "token.actions.githubusercontent.com:sub" = ["StringEquals", ["repo:CraigDevJohnson@42454849/foundry@1361164956:environment:foundry-host"]]
     })
-    error_message = "The host control role must require the STS audience and pin sub to the foundry-host environment."
+    error_message = "The host control role must require the STS audience and pin the immutable sub to the foundry-host environment."
   }
 
   assert {

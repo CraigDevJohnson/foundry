@@ -5,7 +5,11 @@
 # document, so it can't run arbitrary shell as root on the host.
 
 locals {
-  github_repository = "CraigDevJohnson/foundry"
+  # GitHub's immutable OIDC subject: the repository was created on 2026-09-08,
+  # after the 2026-07-15 cutover, so `sub` carries the owner and repository IDs
+  # (owner@id/repo@id) rather than the bare names. A transfer or rename keeps
+  # this form; the IDs never change.
+  github_repository = "CraigDevJohnson@42454849/foundry@1361164956"
 
   # The workflow's GitHub Environment. The trust policy pins `sub` to it, so
   # only jobs in that environment can assume the role, and its protection
