@@ -71,7 +71,10 @@ instance, and run the `foundry-shutdown` document on it, never arbitrary
 commands. Setup, once the role is applied:
 
 1. Create the `foundry-host` environment under the repository's
-   Settings > Environments, optionally with Craig as required reviewer.
+   Settings > Environments. Set **Deployment branches** to `main` only: the
+   role's trust policy pins the environment, not the branch, so this rule is
+   what keeps a workflow from another branch from getting the role. Optionally
+   add Craig as required reviewer.
 2. Add the variable `AWS_HOST_CONTROL_ROLE_ARN` with the value of
    `tofu -chdir=infra output -raw host_control_role_arn`.
 
