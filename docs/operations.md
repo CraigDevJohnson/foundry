@@ -295,3 +295,27 @@ New host at the move: instance `i-05dfb9abbc1caac32` (t4g.small, us-west-2a),
 Elastic IP `52.27.248.145` (`eipalloc-03508fd8e37c5f068`), data volume
 `vol-01ef214b56c69e2ad`, root volume `vol-0956156f289881032`, security group
 `sg-0aa47e89292e89781`, DLM policy `policy-0fb1290b3a1a8478c`.
+
+## The Lobby's controller
+
+The Lobby's `/foundry` page reads the host's state from the controller,
+`foundry-dev-controller` and `foundry-prod-controller`, one per site
+environment (`infra/controller.tf`; deploying it is in
+[infra](../infra/README.md#deploying-the-controller)). It only reads: EC2's
+state, the SSM agent's connectivity and whether `/join` answers. It can't start
+or stop the host; that stays with the tasks and the Host control workflow
+above.
+
+The `foundry-<env>-controller-failing` alarm emails through the workloads
+`alerts` topic when the function crashed, timed out, or could not start, for
+example with an invalid `FOUNDRY_*` setting. The page then can't show the
+status. The function's lines are in `/aws/lambda/foundry-<env>-controller`
+(kept 30 days). Reading them uses `workloads-admin`, so an agent asks Craig
+first:
+
+```sh
+aws logs tail /aws/lambda/foundry-prod-controller --profile workloads-admin --since 1h
+```
+
+A rebuild changes the instance ID the functions watch. The rebuild's plan
+updates them, so apply it in full.

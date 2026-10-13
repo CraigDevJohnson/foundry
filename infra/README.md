@@ -15,14 +15,16 @@ and §10. OpenTofu 1.12.x, AWS provider 6.x. Day-to-day operation of the host
 | `host.tf` | The workloads host: `foundry-host` role (SSM default instance policy, `ssm:GetParameter*` on `parameter/foundry` and `parameter/foundry/*` only, no KMS; exclusive lists for both managed and inline policies) and instance profile, the t4g.small instance (IMDSv2, no key pair, encrypted 10 GiB gp3 root), the 20 GiB `foundry-data` volume with `prevent_destroy`, the Elastic IP with `prevent_destroy`, and the `StatusCheckFailed` alarm to the workloads `alerts` topic (D18) |
 | `backups.tf` | The workloads `foundry-dlm` role and snapshot policy: both volumes tagged `project=foundry`, daily at 10:00 UTC keeping 7, weekly on Sunday at 11:00 UTC keeping 4 |
 | `ci.tf` | The `foundry-host-control-ci` role for the Host control workflow: trusts the workloads GitHub OIDC provider (owned by aws-setup) only for this repository's `foundry-host` environment, and may only describe instances, start and stop the host, and run the parameterless `foundry-shutdown` SSM document (`templates/foundry-shutdown.sh`) on it |
+| `controller.tf` | The controller The Lobby's `/foundry` page calls ([ADR 0005](../docs/adr/0005-the-lobby-calls-the-controller-through-a-function-url.md)), once per site environment: the `foundry-<env>-controller` Lambda (Go, provided.al2023, arm64) with its log group (30 days), its role (own log streams, `ec2:DescribeInstances` and `ssm:DescribeInstanceInformation` only; exclusive lists for both managed and inline policies), an `AWS_IAM` Function URL granted only to `site-<env>-server`, and the `foundry-<env>-controller-failing` alarm on Lambda errors to the workloads `alerts` topic. It reads the host's state and changes nothing |
 | `templates/` | The `foundry-shutdown` script, first-boot user data (no secrets, never formats a disk) and the certbot deploy hook it installs |
-| `outputs.tf` | Instance, Elastic IP, root volume, data volume, Availability Zone and security group IDs for the runbook |
-| `variables.tf` | `ami_id` (AL2023 arm64; the instance ignores later changes). Change it only by committing a new default, never with `-var`, so every plan sees the same value |
+| `outputs.tf` | Instance, Elastic IP, root volume, data volume, Availability Zone and security group IDs for the runbook, the Host control role ARN, and the controller's URLs and function ARNs per site environment for the-lobby |
+| `variables.tf` | `ami_id` (AL2023 arm64; the instance ignores later changes). Change it only by committing a new default, never with `-var`, so every plan sees the same value. `controller_package_path`, the controller's zip, relative to `infra/` (default `../dist/bootstrap.zip`, which `task build` writes) |
 
 ## Commands
 
 Offline checks, also run by CI, need no AWS credentials. The tests in
-`tests/foundry.tftest.hcl` check the plan with a mocked provider:
+`tests/foundry.tftest.hcl` check the plan with a mocked provider, and
+`tests/fixtures/bootstrap.zip` stands in for the controller's zip:
 
 ```sh
 tofu fmt -check -recursive infra
@@ -32,7 +34,8 @@ tofu -chdir=infra test
 ```
 
 A plan needs an Identity Center session (`aws sso login --sso-session identity-center`)
-because the backend and providers use the admin profiles pinned above:
+because the backend and providers use the admin profiles pinned above. It also
+needs the controller's zip, so run `task build` first:
 
 ```sh
 tofu -chdir=infra init
@@ -43,6 +46,57 @@ Apply only a saved plan that Craig has approved: `tofu -chdir=infra apply f1.pla
 The committed `.claude/settings.json` asks before any apply, import, state,
 destroy or force-unlock command, and before any command that names an admin
 profile.
+
+## Deploying the controller
+
+`controller.tf` adds `foundry-dev-controller` and `foundry-prod-controller`,
+which answer The Lobby's `/foundry` page (the HTTP contract is in
+[status-api.md](../docs/status-api.md)). Each is granted only to its site's
+role, `site-dev-server` or `site-prod-server`. Both roles must already exist:
+Lambda refuses a grant to a role it can't find.
+
+1. Build the zip from the repository root: `task build` writes
+   `dist/bootstrap.zip`. The same source gives the same zip, so a later plan
+   after an unchanged build shows no change to the functions.
+2. Plan as above. The first plan adds 20 resources, 10 per environment: the
+   log group, the role, its inline policy, the two exclusive lists, the
+   function, its Function URL, the two grants to the site role and the alarm.
+   It changes nothing else.
+3. Apply only the saved plan Craig approved.
+4. Check each environment with signed requests. AWS lets the admin profile
+   call the URL on its own permissions, so it can sign them. This uses
+   `workloads-admin`, so an agent runs it only as part of the approved change.
+   The signed calls run in a subshell: exported keys take precedence over
+   `AWS_PROFILE`, so left in the shell they would turn later
+   `AWS_PROFILE=workloads-readonly` commands into admin calls.
+
+   ```sh
+   url=$(tofu -chdir=infra output -json controller_urls | jq -r .dev); echo "$url"
+   curl -sS -o /dev/null -w '%{http_code}\n' "${url}server"
+   (
+     eval "$(aws configure export-credentials --profile workloads-admin --format env)"
+     curl -sS -o /dev/null -w '%{http_code}\n' --aws-sigv4 "aws:amz:us-west-2:lambda" \
+       --user "$AWS_ACCESS_KEY_ID:$AWS_SECRET_ACCESS_KEY" -H "x-amz-security-token: $AWS_SESSION_TOKEN" \
+       "${url}healthz"
+     curl -sS --aws-sigv4 "aws:amz:us-west-2:lambda" \
+       --user "$AWS_ACCESS_KEY_ID:$AWS_SECRET_ACCESS_KEY" -H "x-amz-security-token: $AWS_SESSION_TOKEN" \
+       "${url}server"; echo
+   )
+   ```
+
+   This prints the address, `https://<id>.lambda-url.us-west-2.on.aws/`, then
+   `403` (an unsigned call is refused), then `204`, then the status JSON, such
+   as `{"state":"ready","join_url":"https://foundry.craigdevjohnson.com:30000/join",...}`.
+   Repeat with `.prod`.
+5. Connect the site. In the-lobby, set `foundry_backend_url` and
+   `foundry_backend_function_arn` in `infra/environments/dev/dev.tfvars` to the
+   `dev` values of `tofu -chdir=infra output controller_urls` and
+   `controller_function_arns`, and the `prod` values in
+   `infra/environments/prod/prod.tfvars`, then deploy the site as that
+   repository describes.
+
+The functions take the instance ID from `aws_instance.host`, so a rebuild plan
+also updates both. While that apply runs, the page reports no server.
 
 ## Manual snapshot before upgrades
 

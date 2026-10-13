@@ -9,6 +9,11 @@ The tools through which an operator manages the hosted Foundry VTT installation
 and its host.
 _Avoid_: Foundry VTT (when referring to management tools)
 
+**Controller**:
+The management plane's backend: the Lambda function The Lobby's `/foundry`
+page calls for the host's status. One runs for each Lobby site environment.
+It only reads; starting and stopping the host are not part of it yet.
+
 **Foundry VTT**:
 Foundry Virtual Tabletop, the application Craig hosts for tabletop play.
 _Avoid_: Management plane
