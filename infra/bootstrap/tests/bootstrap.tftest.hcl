@@ -219,14 +219,73 @@ run "no_state_or_secret_beyond_its_own" {
 run "ec2_changes_stay_on_foundry_resources" {
   command = plan
 
+  # Exactly the calls the provider makes for the host, its data volume,
+  # Elastic IP and security group, besides reading.
+  assert {
+    condition = toset(flatten([
+      for s in data.aws_iam_policy_document.deployer.statement :
+      [for a in s.actions : a if startswith(a, "ec2:")] if s.effect != "Deny"
+      ])) == toset([
+      "ec2:Describe*", "ec2:GetInstanceUefiData",
+      "ec2:AllocateAddress", "ec2:AuthorizeSecurityGroupEgress", "ec2:AuthorizeSecurityGroupIngress",
+      "ec2:CreateSecurityGroup", "ec2:CreateVolume", "ec2:RunInstances",
+      "ec2:AssociateAddress", "ec2:AttachVolume", "ec2:DeleteSecurityGroup", "ec2:DeleteVolume",
+      "ec2:DetachVolume", "ec2:DisassociateAddress", "ec2:ModifyInstanceAttribute",
+      "ec2:ModifyInstanceMetadataOptions", "ec2:ModifyNetworkInterfaceAttribute",
+      "ec2:ModifySecurityGroupRules", "ec2:ModifyVolume", "ec2:ReleaseAddress",
+      "ec2:RevokeSecurityGroupEgress", "ec2:RevokeSecurityGroupIngress", "ec2:StartInstances",
+      "ec2:StopInstances", "ec2:TerminateInstances", "ec2:CreateTags", "ec2:DeleteTags",
+    ])
+    error_message = "The deploy role may make only the EC2 calls the infra root needs."
+  }
+
+  # A new instance, volume, Elastic IP or rule is allowed only with
+  # project=foundry in the request, and a new host or rule may use only a
+  # security group that carries it.
+  assert {
+    condition = alltrue([
+      for s in data.aws_iam_policy_document.deployer.statement :
+      s.effect == "Deny" ||
+      length(setintersection(s.actions, toset(["ec2:AllocateAddress", "ec2:AuthorizeSecurityGroupEgress", "ec2:AuthorizeSecurityGroupIngress", "ec2:CreateSecurityGroup", "ec2:CreateVolume", "ec2:RunInstances"]))) == 0 ||
+      anytrue([for c in s.condition : c.test == "StringEquals" && c.variable == "aws:RequestTag/project" && toset(c.values) == toset(["foundry"])]) ||
+      (
+        length(setintersection(s.resources, toset([
+          "*",
+          "arn:aws:ec2:us-west-2:793680745829:elastic-ip/*",
+          "arn:aws:ec2:us-west-2:793680745829:instance/*",
+          "arn:aws:ec2:us-west-2:793680745829:security-group-rule/*",
+          "arn:aws:ec2:us-west-2:793680745829:volume/*",
+        ]))) == 0 &&
+        (
+          !contains(tolist(s.resources), "arn:aws:ec2:us-west-2:793680745829:security-group/*") ||
+          (
+            !contains(tolist(s.actions), "ec2:CreateSecurityGroup") &&
+            anytrue([for c in s.condition : c.test == "StringEquals" && c.variable == "aws:ResourceTag/project" && toset(c.values) == toset(["foundry"])])
+          )
+        )
+      )
+    ])
+    error_message = "Every EC2 resource the deploy role creates must carry project=foundry in the request, and use only Foundry's security group."
+  }
+
   assert {
     condition = anytrue([
       for s in data.aws_iam_policy_document.deployer.statement :
       s.sid == "OnlyFoundryEc2Resources" && s.effect == "Deny" &&
-      length(setintersection(s.actions, toset(["ec2:TerminateInstances", "ec2:DeleteVolume", "ec2:DetachVolume", "ec2:ReleaseAddress", "ec2:DeleteSecurityGroup"]))) == 5 &&
+      length(setintersection(s.actions, toset(["ec2:TerminateInstances", "ec2:DeleteVolume", "ec2:DetachVolume", "ec2:ReleaseAddress", "ec2:DeleteSecurityGroup", "ec2:ModifyNetworkInterfaceAttribute", "ec2:AuthorizeSecurityGroupIngress"]))) == 7 &&
       anytrue([for c in s.condition : c.test == "StringNotEquals" && c.variable == "aws:ResourceTag/project" && toset(c.values) == toset(["foundry"])])
     ])
     error_message = "Destroying or changing an EC2 resource must need project=foundry."
+  }
+
+  assert {
+    condition = anytrue([
+      for s in data.aws_iam_policy_document.deployer.statement :
+      s.sid == "TagOnlyFoundryEc2Resources" && s.effect == "Deny" && s.actions == toset(["ec2:CreateTags", "ec2:DeleteTags"]) && s.resources == toset(["*"]) &&
+      anytrue([for c in s.condition : c.test == "StringNotEquals" && c.variable == "aws:ResourceTag/project" && toset(c.values) == toset(["foundry"])]) &&
+      anytrue([for c in s.condition : c.test == "Null" && c.variable == "ec2:CreateAction" && toset(c.values) == toset(["true"])])
+    ])
+    error_message = "Outside a create, only a resource carrying project=foundry may be tagged."
   }
 
   assert {
@@ -237,23 +296,18 @@ run "ec2_changes_stay_on_foundry_resources" {
     error_message = "The project tag must only be set when a resource is created."
   }
 
+  # A grant on every resource holds only in us-west-2; the others name
+  # us-west-2 in their ARNs.
   assert {
     condition = alltrue([
       for s in data.aws_iam_policy_document.deployer.statement :
-      !contains(tolist(s.actions), "ec2:*") || anytrue([
-        for c in s.condition : c.variable == "aws:RequestedRegion" && toset(c.values) == toset(["us-west-2"])
-      ])
+      s.effect == "Deny" || length([for a in s.actions : a if startswith(a, "ec2:")]) == 0 || (
+        contains(tolist(s.resources), "*") ?
+        anytrue([for c in s.condition : c.variable == "aws:RequestedRegion" && toset(c.values) == toset(["us-west-2"])]) :
+        alltrue([for r in s.resources : startswith(r, "arn:aws:ec2:us-west-2:")])
+      )
     ])
     error_message = "EC2 is granted in us-west-2 only."
-  }
-
-  assert {
-    condition = anytrue([
-      for s in data.aws_iam_policy_document.deployer.statement :
-      s.effect == "Deny" && s.resources == toset(["*"]) &&
-      length(setintersection(s.actions, toset(["ec2:DeleteVpc", "ec2:DeleteSubnet", "ec2:CreateRoute", "ec2:ReplaceRoute", "ec2:DeleteSnapshot"]))) == 5
-    ])
-    error_message = "The shared default VPC, its routes and the snapshots must stay out of reach."
   }
 }
 

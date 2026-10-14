@@ -80,6 +80,12 @@ snapshot role (`foundry-dlm`) and the state bucket's settings, which the
 deploy role can't make: a Deploy apply that changes one stops with
 `AccessDenied` at that resource.
 
+In EC2 the role may make only the calls the infra root's resources make
+today (`ec2_create_actions` and `ec2_change_actions` in
+`bootstrap/deployer.tf`). A change that adds a new kind of EC2 resource, or
+an argument that needs another call, adds that call there and is applied to
+the bootstrap first.
+
 One time, in GitHub, at Settings › Environments, after the repository is
 public:
 

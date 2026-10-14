@@ -58,6 +58,43 @@ locals {
   # rule may notify.
   alerts_topic_arn = "arn:aws:sns:${local.region}:${local.account}:alerts"
 
+  # The EC2 calls the infra root's resources make in a create, an update, a
+  # host rebuild or a delete, besides reading and tagging.
+  ec2_create_actions = [
+    "ec2:AllocateAddress",
+    "ec2:AuthorizeSecurityGroupEgress",
+    "ec2:AuthorizeSecurityGroupIngress",
+    "ec2:CreateSecurityGroup",
+    "ec2:CreateVolume",
+    "ec2:RunInstances",
+  ]
+  ec2_created_resources = [
+    "arn:aws:ec2:${local.region}:${local.account}:elastic-ip/*",
+    "arn:aws:ec2:${local.region}:${local.account}:instance/*",
+    "arn:aws:ec2:${local.region}:${local.account}:security-group/*",
+    "arn:aws:ec2:${local.region}:${local.account}:security-group-rule/*",
+    "arn:aws:ec2:${local.region}:${local.account}:volume/*",
+  ]
+  ec2_change_actions = [
+    "ec2:AssociateAddress",
+    "ec2:AttachVolume",
+    "ec2:DeleteSecurityGroup",
+    "ec2:DeleteVolume",
+    "ec2:DetachVolume",
+    "ec2:DisassociateAddress",
+    "ec2:ModifyInstanceAttribute",
+    "ec2:ModifyInstanceMetadataOptions",
+    "ec2:ModifyNetworkInterfaceAttribute",
+    "ec2:ModifySecurityGroupRules",
+    "ec2:ModifyVolume",
+    "ec2:ReleaseAddress",
+    "ec2:RevokeSecurityGroupEgress",
+    "ec2:RevokeSecurityGroupIngress",
+    "ec2:StartInstances",
+    "ec2:StopInstances",
+    "ec2:TerminateInstances",
+  ]
+
   # The EC2 resources the infra root manages carry project=foundry
   # (providers.tf's default tags). Changing or deleting one without it is
   # refused, so the deploy role can't touch another project's host.
@@ -227,12 +264,81 @@ data "aws_iam_policy_document" "deployer" {
     resources = [local.state_bucket_arn]
   }
 
-  # EC2 in us-west-2: the host, its volumes, Elastic IP and security group,
-  # and reading the default VPC. The denies below keep it to Foundry's
-  # resources and away from account-wide settings.
+  # EC2: only the calls OpenTofu makes for the host, its data volume, Elastic
+  # IP and security group (recorded from the provider's own requests), all in
+  # us-west-2. Nothing else: no other kind of EC2 resource, no snapshot, image,
+  # network or account setting.
   statement {
-    sid       = "Ec2InUsWest2"
-    actions   = ["ec2:*"]
+    sid       = "Ec2Read"
+    actions   = ["ec2:Describe*", "ec2:GetInstanceUefiData"]
+    resources = ["*"]
+
+    condition {
+      test     = "StringEquals"
+      variable = "aws:RequestedRegion"
+      values   = [local.region]
+    }
+  }
+
+  # Each new instance, volume, security group, rule or Elastic IP carries
+  # project=foundry from the start (providers.tf's default tags), or isn't
+  # made.
+  statement {
+    sid       = "CreateOnlyTaggedFoundry"
+    actions   = local.ec2_create_actions
+    resources = local.ec2_created_resources
+
+    condition {
+      test     = "StringEquals"
+      variable = "aws:RequestTag/project"
+      values   = ["foundry"]
+    }
+  }
+
+  # The rest of what a create names: the host's subnet, AMI and primary
+  # network interface, and the VPC its security group goes in.
+  statement {
+    sid     = "CreateInTheSharedNetwork"
+    actions = ["ec2:CreateSecurityGroup", "ec2:RunInstances"]
+    resources = [
+      "arn:aws:ec2:${local.region}::image/*",
+      "arn:aws:ec2:${local.region}:${local.account}:network-interface/*",
+      "arn:aws:ec2:${local.region}:${local.account}:subnet/*",
+      "arn:aws:ec2:${local.region}:${local.account}:vpc/*",
+    ]
+  }
+
+  # A new host or rule may use only Foundry's security group.
+  statement {
+    sid       = "UseOnlyFoundrySecurityGroups"
+    actions   = ["ec2:AuthorizeSecurityGroupEgress", "ec2:AuthorizeSecurityGroupIngress", "ec2:RunInstances"]
+    resources = ["arn:aws:ec2:${local.region}:${local.account}:security-group/*"]
+
+    condition {
+      test     = "StringEquals"
+      variable = "aws:ResourceTag/project"
+      values   = ["foundry"]
+    }
+  }
+
+  # Tagging a resource as it is made.
+  statement {
+    sid       = "TagOnCreate"
+    actions   = ["ec2:CreateTags"]
+    resources = ["arn:aws:ec2:${local.region}:${local.account}:*/*"]
+
+    condition {
+      test     = "StringEquals"
+      variable = "ec2:CreateAction"
+      values   = local.ec2_create_actions
+    }
+  }
+
+  # Changing, retagging or deleting a resource, which the denies below allow
+  # only when it carries project=foundry.
+  statement {
+    sid       = "ChangeFoundryEc2Resources"
+    actions   = concat(local.ec2_change_actions, ["ec2:CreateTags", "ec2:DeleteTags"])
     resources = ["*"]
 
     condition {
@@ -243,95 +349,9 @@ data "aws_iam_policy_document" "deployer" {
   }
 
   statement {
-    sid    = "NeverWeakenEc2AccountSettingsOrShare"
-    effect = "Deny"
-    actions = [
-      "ec2:CreateNetworkInterfacePermission",
-      "ec2:CreateVpcBlockPublicAccessExclusion",
-      "ec2:DeleteFlowLogs",
-      "ec2:DeleteVpcBlockPublicAccessExclusion",
-      "ec2:DisableAllowedImagesSettings",
-      "ec2:DisableEbsEncryptionByDefault",
-      "ec2:DisableImageBlockPublicAccess",
-      "ec2:DisableSnapshotBlockPublicAccess",
-      "ec2:EnableAllowedImagesSettings",
-      "ec2:EnableSerialConsoleAccess",
-      "ec2:ModifyEbsDefaultKmsKeyId",
-      "ec2:ModifyImageAttribute",
-      "ec2:ModifyInstanceMetadataDefaults",
-      "ec2:ModifySnapshotAttribute",
-      "ec2:ModifyVpcBlockPublicAccessExclusion",
-      "ec2:ModifyVpcBlockPublicAccessOptions",
-      "ec2:ReplaceImageCriteriaInAllowedImagesSettings",
-      "ec2:ResetEbsDefaultKmsKeyId",
-    ]
-    resources = ["*"]
-  }
-
-  # The default VPC and its network are shared with other projects, and
-  # snapshots are Data Lifecycle Manager's to retire. The infra root only
-  # reads the network.
-  statement {
-    sid    = "LeaveSharedNetworkAndSnapshots"
-    effect = "Deny"
-    actions = [
-      "ec2:AssociateDhcpOptions",
-      "ec2:AssociateRouteTable",
-      "ec2:CreateNetworkAclEntry",
-      "ec2:CreateRoute",
-      "ec2:DeleteDhcpOptions",
-      "ec2:DeleteEgressOnlyInternetGateway",
-      "ec2:DeleteInternetGateway",
-      "ec2:DeleteNatGateway",
-      "ec2:DeleteNetworkAcl",
-      "ec2:DeleteNetworkAclEntry",
-      "ec2:DeleteRoute",
-      "ec2:DeleteRouteTable",
-      "ec2:DeleteSnapshot",
-      "ec2:DeleteSubnet",
-      "ec2:DeleteVpc",
-      "ec2:DeleteVpcEndpoints",
-      "ec2:DetachInternetGateway",
-      "ec2:DisassociateRouteTable",
-      "ec2:ModifySubnetAttribute",
-      "ec2:ModifyVpcAttribute",
-      "ec2:ReplaceNetworkAclAssociation",
-      "ec2:ReplaceNetworkAclEntry",
-      "ec2:ReplaceRoute",
-      "ec2:ReplaceRouteTableAssociation",
-    ]
-    resources = ["*"]
-  }
-
-  # Changing an existing instance, volume, security group or Elastic IP needs
-  # it to carry project=foundry. Creating one isn't affected: it carries the
-  # tag from the start.
-  statement {
-    sid    = "OnlyFoundryEc2Resources"
-    effect = "Deny"
-    actions = [
-      "ec2:AssociateAddress",
-      "ec2:AttachVolume",
-      "ec2:AuthorizeSecurityGroupEgress",
-      "ec2:AuthorizeSecurityGroupIngress",
-      "ec2:DeleteSecurityGroup",
-      "ec2:DeleteVolume",
-      "ec2:DetachVolume",
-      "ec2:DisassociateAddress",
-      "ec2:ModifyInstanceAttribute",
-      "ec2:ModifyInstanceMetadataOptions",
-      "ec2:ModifySecurityGroupRules",
-      "ec2:ModifyVolume",
-      "ec2:RebootInstances",
-      "ec2:ReleaseAddress",
-      "ec2:RevokeSecurityGroupEgress",
-      "ec2:RevokeSecurityGroupIngress",
-      "ec2:StartInstances",
-      "ec2:StopInstances",
-      "ec2:TerminateInstances",
-      "ec2:UpdateSecurityGroupRuleDescriptionsEgress",
-      "ec2:UpdateSecurityGroupRuleDescriptionsIngress",
-    ]
+    sid       = "OnlyFoundryEc2Resources"
+    effect    = "Deny"
+    actions   = concat(local.ec2_change_actions, ["ec2:AuthorizeSecurityGroupEgress", "ec2:AuthorizeSecurityGroupIngress"])
     resources = local.ec2_resources
 
     condition {
@@ -341,8 +361,29 @@ data "aws_iam_policy_document" "deployer" {
     }
   }
 
+  # Outside a create, only a resource that already carries project=foundry
+  # may be tagged, whatever kind it is.
+  statement {
+    sid       = "TagOnlyFoundryEc2Resources"
+    effect    = "Deny"
+    actions   = ["ec2:CreateTags", "ec2:DeleteTags"]
+    resources = ["*"]
+
+    condition {
+      test     = "StringNotEquals"
+      variable = "aws:ResourceTag/project"
+      values   = ["foundry"]
+    }
+
+    condition {
+      test     = "Null"
+      variable = "ec2:CreateAction"
+      values   = ["true"]
+    }
+  }
+
   # The project tag is set only when a resource is created, so another
-  # project's resource can't be tagged into the rule above.
+  # project's resource can't be tagged into the rules above.
   statement {
     sid       = "ProjectTagOnlyAtCreation"
     effect    = "Deny"
