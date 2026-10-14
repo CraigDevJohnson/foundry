@@ -118,7 +118,6 @@ run "roles_are_passed_only_to_their_service" {
       if contains(tolist(s.actions), "iam:PassRole")
       }) == jsonencode({
       "arn:aws:iam::793680745829:role/foundry-*-controller" = ["lambda.amazonaws.com"]
-      "arn:aws:iam::793680745829:role/foundry-dlm"          = ["dlm.amazonaws.com"]
       "arn:aws:iam::793680745829:role/foundry-host"         = ["ec2.amazonaws.com"]
     })
     error_message = "PassRole must name one role per statement and the one service that uses it."
@@ -337,27 +336,28 @@ run "ec2_changes_stay_on_foundry_resources" {
 # The boundary is what a role the deploy role makes can ever do: Foundry's
 # hosts, documents and logs, and never IAM, parameters, keys or other
 # documents.
-# The deploy role changes only the snapshot policy tagged project=foundry and
-# never creates one: a create also tags the new policy, which no tag
-# condition can check.
-run "snapshot_policy_changes_only_foundrys" {
+# The deploy role only reads the snapshot policy: a policy can snapshot any
+# volume its tags match and share the snapshots, which no DLM condition
+# limits, so every change to it is an admin apply.
+run "snapshot_policy_is_read_only" {
   command = plan
 
   assert {
-    condition = alltrue([
-      for s in data.aws_iam_policy_document.deployer.statement :
-      s.effect == "Deny" || !contains(tolist(s.actions), "dlm:CreateLifecyclePolicy")
-    ])
-    error_message = "The deploy role must not create a snapshot policy."
+    condition = alltrue(flatten([
+      for s in data.aws_iam_policy_document.deployer.statement : [
+        for a in s.actions : !startswith(a, "dlm:") || contains(["dlm:GetLifecyclePolicies", "dlm:GetLifecyclePolicy", "dlm:ListTagsForResource"], a)
+      ] if s.effect != "Deny"
+    ]))
+    error_message = "The deploy role may only read snapshot policies."
   }
 
   assert {
     condition = alltrue([
       for s in data.aws_iam_policy_document.deployer.statement :
-      s.effect == "Deny" || length([for a in s.actions : a if startswith(a, "dlm:") && a != "dlm:GetLifecyclePolicies"]) == 0 ||
-      anytrue([for c in s.condition : c.test == "StringEquals" && c.variable == "aws:ResourceTag/project" && toset(c.values) == toset(["foundry"])])
+      s.effect == "Deny" || !contains(tolist(s.actions), "iam:PassRole") ||
+      !anytrue([for r in s.resources : can(regex("^${replace(r, "*", ".*")}$", "arn:aws:iam::793680745829:role/foundry-dlm"))])
     ])
-    error_message = "Every snapshot policy change needs the policy to carry project=foundry."
+    error_message = "The deploy role must not pass foundry-dlm: only a snapshot policy change would need it."
   }
 }
 

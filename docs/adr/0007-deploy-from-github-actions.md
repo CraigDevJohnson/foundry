@@ -51,10 +51,15 @@ What it may do is set by rules that hold whatever a commit to `main` says:
   documents and log streams, and never IAM, a parameter or a key. So no role
   the deploy role makes can do more than the controllers already do. It
   never assumes a role, so changing a role's trust lends it nothing.
-- **The host's and snapshot roles.** It may pass `foundry-host` to EC2 and
-  `foundry-dlm` to Data Lifecycle Manager, so it can rebuild the host and
-  keep the snapshot policy, but never change either role: the host's role
-  reads Foundry's SecureStrings, which the boundary doesn't allow.
+- **The host's role.** It may pass `foundry-host` to EC2, so it can rebuild
+  the host, but never change the role: it reads Foundry's SecureStrings,
+  which the boundary doesn't allow.
+- **The snapshot policy.** It only reads the snapshot policy and never
+  passes its role, `foundry-dlm`. A lifecycle policy snapshots every volume
+  its target tags match and can share the snapshots with other accounts,
+  and Data Lifecycle Manager has no condition key that limits either, so a
+  role that could change Foundry's policy could copy any volume in the
+  account out of it.
 - **What the host can reach.** Because it rebuilds the host, sets the host's
   user data and writes the `foundry-stop` document the host runs, a run can
   have the host do anything the host's role allows, including reading
@@ -73,20 +78,19 @@ What it may do is set by rules that hold whatever a commit to `main` says:
   network interface carries no tag to check, so the one call that names one,
   associating an Elastic IP, could move Foundry's address onto another
   host's interface, though never another address.
-- **The rest.** Only `foundry-*` functions, log groups, alarms and documents,
-  the `foundry-stop-failed` rule and the snapshot policy tagged
-  `project=foundry`, which it changes but never creates: creating one also
-  tags it, and no condition can check the policy being tagged then. A Function URL may only be `AWS_IAM`, an invoke grant may
-  name only The Lobby's `site-dev-server` and `site-prod-server`, and alarms
-  and the rule may notify only the `alerts` topic.
+- **The rest.** Only `foundry-*` functions, log groups, alarms and documents
+  and the `foundry-stop-failed` rule. A Function URL may only be `AWS_IAM`,
+  an invoke grant may name only The Lobby's `site-dev-server` and
+  `site-prod-server`, and alarms and the rule may notify only the `alerts`
+  topic.
 - It never reads a parameter or secret, sends a command or opens a session.
 
 The role and the boundary live in their own root, `infra/bootstrap`, which
 Craig applies with `workloads-admin`, once and for each later change to it.
-So do changes to `foundry-host`, `foundry-dlm` and the state bucket's
-settings, and creating or replacing the snapshot policy, the few things the
-deploy role can't do. The offline tests in
-`infra/bootstrap/tests` check the rules above against the plan.
+So do changes to `foundry-host`, `foundry-dlm`, the snapshot policy and the
+state bucket's settings, the few things the deploy role can't change. The
+offline tests in `infra/bootstrap/tests` check the rules above against the
+plan.
 
 ## Considered options
 

@@ -552,11 +552,11 @@ data "aws_iam_policy_document" "deployer" {
     resources = [local.documents]
   }
 
-  # The snapshot policy, tagged project=foundry, once it exists. Creating
-  # one also needs dlm:TagResource on the new policy, which has no tag yet to
-  # check, and a tag grant without that check could tag another project's
-  # policy into this one. So creating or replacing the policy stays with
-  # Craig's admin sign-in, like its role.
+  # The snapshot policy is only read, so a plan can refresh it. A policy
+  # snapshots every volume its target tags match and can share the snapshots
+  # with other accounts, through foundry-dlm's service role, and DLM has no
+  # condition key that limits either. So any change to it stays with Craig's
+  # admin sign-in, like its role.
   statement {
     sid       = "SnapshotPolicyList"
     actions   = ["dlm:GetLifecyclePolicies"]
@@ -564,14 +564,10 @@ data "aws_iam_policy_document" "deployer" {
   }
 
   statement {
-    sid = "SnapshotPolicy"
+    sid = "SnapshotPolicyRead"
     actions = [
-      "dlm:DeleteLifecyclePolicy",
       "dlm:GetLifecyclePolicy",
       "dlm:ListTagsForResource",
-      "dlm:TagResource",
-      "dlm:UntagResource",
-      "dlm:UpdateLifecyclePolicy",
     ]
     resources = ["arn:aws:dlm:${local.region}:${local.account}:policy/*"]
 
@@ -690,18 +686,6 @@ data "aws_iam_policy_document" "deployer" {
       test     = "StringEquals"
       variable = "iam:PassedToService"
       values   = ["ec2.amazonaws.com"]
-    }
-  }
-
-  statement {
-    sid       = "PassSnapshotRoleToDlm"
-    actions   = ["iam:PassRole"]
-    resources = ["arn:aws:iam::${local.account}:role/foundry-dlm"]
-
-    condition {
-      test     = "StringEquals"
-      variable = "iam:PassedToService"
-      values   = ["dlm.amazonaws.com"]
     }
   }
 }

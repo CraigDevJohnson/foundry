@@ -77,8 +77,8 @@ Check it on both runs: the digest covers it.
 `foundry-workload-boundary` boundary on the roles it makes. It is applied by
 Craig with `workloads-admin`, once before the first Deploy run and again for
 each change to it. So are changes to the host's role (`foundry-host`), the
-snapshot role (`foundry-dlm`) and the state bucket's settings, and creating
-or replacing the snapshot policy, which the deploy role can't do: a Deploy apply that changes one stops with
+snapshot policy and its role (`foundry-dlm`) and the state bucket's settings,
+which the deploy role can't make: a Deploy apply that changes one stops with
 `AccessDenied` at that resource. The role can still have the host do anything
 the host's role allows, by rebuilding it, setting its user data or changing
 the stop document it runs, so what limits it there is that only a run you
