@@ -22,7 +22,8 @@ A plan run posts the plan and its digest to the run summary. An apply run
 takes that digest, plans again and applies only a plan with the same digest
 (`scripts/deploy.sh`, `cmd/plandigest`), so it applies exactly the plan Craig
 read or nothing. The digest covers each changed resource's actions, the
-object it acts on, its planned values and each changed output, and leaves out
+object it acts on, its planned values, any import or move into it and each
+changed output, and leaves out
 what only describes the present, so starting or stopping Foundry between the
 two runs doesn't change it unless the plan changes the host. A host rebuild
 (`-replace=aws_instance.host`) is a Deploy option the digest covers too.
@@ -51,10 +52,14 @@ What it may do is set by rules that hold whatever a commit to `main` says:
   `foundry-dlm` to Data Lifecycle Manager, so it can rebuild the host and
   keep the snapshot policy, but never change either role: the host's role
   reads Foundry's SecureStrings, which the boundary doesn't allow.
-- **EC2.** It manages EC2 in us-west-2, but changes or deletes only
-  instances, volumes, security groups and Elastic IPs tagged
-  `project=foundry`, and sets that tag only on a resource it is creating. It
-  never changes the default VPC's network, deletes a snapshot or changes an
+- **EC2.** Only the calls OpenTofu makes for the host, its data volume,
+  Elastic IP and security group, in us-west-2, recorded from the provider's
+  own requests. Each instance, volume, security group, rule or Elastic IP it
+  creates must carry `project=foundry` in the request, a new host or rule may
+  use only Foundry's security group, and it changes, tags or deletes only a
+  resource already tagged `project=foundry`. It sets that tag only on a
+  resource it is creating. It can make no other kind of EC2 resource, and
+  never changes the default VPC's network, a snapshot, an image or an
   account-wide EC2 setting.
 - **The rest.** Only `foundry-*` functions, log groups, alarms and documents,
   the `foundry-stop-failed` rule and the snapshot policy tagged

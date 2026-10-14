@@ -101,6 +101,45 @@ func TestDigestCoversWhatTheApplyDoes(t *testing.T) {
 	}
 }
 
+// An import or a move changes the state even when the object stays as it is,
+// so a plan with only that is not a plan with no changes.
+func TestDigestCoversImportsAndMoves(t *testing.T) {
+	plan := func(resource string) string {
+		return `{"format_version":"1.2","resource_changes":[` + resource + `]}`
+	}
+	none := digestOf(t, plan(`{"address":"aws_eip.host","change":{"actions":["no-op"],"before":{"id":"eipalloc-1"},"after":{"id":"eipalloc-1"},"after_unknown":{}}}`))
+	imported := digestOf(t, plan(`{"address":"aws_eip.host","change":{"actions":["no-op"],"before":{"id":"eipalloc-1"},"after":{"id":"eipalloc-1"},"after_unknown":{},"importing":{"id":"eipalloc-1"}}}`))
+	importedOther := digestOf(t, plan(`{"address":"aws_eip.host","change":{"actions":["no-op"],"before":{"id":"eipalloc-1"},"after":{"id":"eipalloc-1"},"after_unknown":{},"importing":{"id":"eipalloc-2"}}}`))
+	moved := digestOf(t, plan(`{"address":"aws_eip.host","previous_address":"aws_eip.old","change":{"actions":["no-op"],"before":{"id":"eipalloc-1"},"after":{"id":"eipalloc-1"},"after_unknown":{}}}`))
+	movedHere := digestOf(t, plan(`{"address":"aws_eip.host","previous_address":"aws_eip.host","change":{"actions":["no-op"],"before":{"id":"eipalloc-1"},"after":{"id":"eipalloc-1"},"after_unknown":{}}}`))
+	if none != digestOf(t, `{"format_version":"1.2"}`) {
+		t.Fatal("a no-op gave a digest other than no changes")
+	}
+	for name, d := range map[string]string{"an import": imported, "an import of another object": importedOther, "a move": moved} {
+		if d == none {
+			t.Errorf("%s has the no-changes digest", name)
+		}
+	}
+	if imported == importedOther {
+		t.Error("imports of two objects have one digest")
+	}
+	if movedHere != none {
+		t.Error("a previous address equal to the address counted as a move")
+	}
+}
+
+// A deposed object's change is told apart from the current object's.
+func TestDigestCoversDeposedObjects(t *testing.T) {
+	current := `{"address":"aws_instance.host","change":{"actions":["delete"],"before":{"id":"i-1"},"after":null,"after_unknown":{}}}`
+	deposed := `{"address":"aws_instance.host","deposed":"00000001","change":{"actions":["delete"],"before":{"id":"i-1"},"after":null,"after_unknown":{}}}`
+	if digestOf(t, `{"format_version":"1.2","resource_changes":[`+current+`]}`) == digestOf(t, `{"format_version":"1.2","resource_changes":[`+deposed+`]}`) {
+		t.Error("deleting the deposed object has the digest of deleting the current one")
+	}
+	if digestOf(t, `{"format_version":"1.2","resource_changes":[`+current+`,`+deposed+`]}`) != digestOf(t, `{"format_version":"1.2","resource_changes":[`+deposed+`,`+current+`]}`) {
+		t.Error("the digest depends on the order of an address's objects")
+	}
+}
+
 func TestDigestDoesNotDependOnResourceOrder(t *testing.T) {
 	a := `{"format_version":"1.2","resource_changes":[
 	  {"address":"a","change":{"actions":["create"],"before":null,"after":{"x":1},"after_unknown":{}}},

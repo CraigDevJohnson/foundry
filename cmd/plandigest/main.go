@@ -6,7 +6,9 @@
 // digest Craig copied from the plan he read. It covers what the apply would
 // do: each changed resource's actions, the object it acts on (its id and ARN
 // before the change, so a delete or update can't land on a different object
-// than the one planned), its planned values, and each changed output. It
+// than the one planned), its planned values, any import or move into its
+// address, and each changed output. A resource whose only change is an import
+// or a move counts as changed: either one changes the state. It
 // leaves out the rest of what describes the present, such as unchanged
 // resources and the other values a change starts from (among them whether
 // the host runs), so starting or stopping Foundry between the two runs
@@ -16,6 +18,7 @@ package main
 
 import (
 	"bytes"
+	"cmp"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -39,8 +42,16 @@ type savedPlan struct {
 }
 
 type resourceChange struct {
-	Address string `json:"address"`
-	Change  change `json:"change"`
+	Address         string `json:"address"`
+	PreviousAddress string `json:"previous_address"`
+	Deposed         string `json:"deposed"`
+	Change          change `json:"change"`
+}
+
+// changesState says whether applying this resource's change does anything:
+// an action, or an import or move that leaves the object as it is.
+func (rc resourceChange) changesState() bool {
+	return !rc.Change.noOp() || rc.Change.Importing != nil || (rc.PreviousAddress != "" && rc.PreviousAddress != rc.Address)
 }
 
 type change struct {
@@ -49,17 +60,21 @@ type change struct {
 	After        any      `json:"after"`
 	AfterUnknown any      `json:"after_unknown"`
 	ReplacePaths any      `json:"replace_paths"`
+	Importing    any      `json:"importing"`
 }
 
 func (c change) noOp() bool { return slices.Equal(c.Actions, []string{"no-op"}) }
 
 type digestResource struct {
-	Address      string         `json:"address"`
-	Actions      []string       `json:"actions"`
-	ActsOn       map[string]any `json:"acts_on"`
-	After        any            `json:"after"`
-	AfterUnknown any            `json:"after_unknown"`
-	ReplacePaths any            `json:"replace_paths"`
+	Address         string         `json:"address"`
+	PreviousAddress string         `json:"previous_address,omitempty"`
+	Deposed         string         `json:"deposed,omitempty"`
+	Actions         []string       `json:"actions"`
+	ActsOn          map[string]any `json:"acts_on"`
+	After           any            `json:"after"`
+	AfterUnknown    any            `json:"after_unknown"`
+	ReplacePaths    any            `json:"replace_paths"`
+	Importing       any            `json:"importing,omitempty"`
 }
 
 type digestOutput struct {
@@ -102,7 +117,7 @@ func digest(r io.Reader) (string, error) {
 
 	resources := []digestResource{}
 	for _, rc := range plan.ResourceChanges {
-		if rc.Change.noOp() {
+		if !rc.changesState() {
 			continue
 		}
 		var actsOn map[string]any
@@ -113,15 +128,21 @@ func digest(r io.Reader) (string, error) {
 			}
 		}
 		resources = append(resources, digestResource{
-			Address:      rc.Address,
-			Actions:      rc.Change.Actions,
-			ActsOn:       actsOn,
-			After:        rc.Change.After,
-			AfterUnknown: rc.Change.AfterUnknown,
-			ReplacePaths: rc.Change.ReplacePaths,
+			Address:         rc.Address,
+			PreviousAddress: rc.PreviousAddress,
+			Deposed:         rc.Deposed,
+			Actions:         rc.Change.Actions,
+			ActsOn:          actsOn,
+			After:           rc.Change.After,
+			AfterUnknown:    rc.Change.AfterUnknown,
+			ReplacePaths:    rc.Change.ReplacePaths,
+			Importing:       rc.Change.Importing,
 		})
 	}
-	slices.SortStableFunc(resources, func(a, b digestResource) int { return strings.Compare(a.Address, b.Address) })
+	// A deposed object shares its address with the current one.
+	slices.SortStableFunc(resources, func(a, b digestResource) int {
+		return cmp.Or(strings.Compare(a.Address, b.Address), strings.Compare(a.Deposed, b.Deposed))
+	})
 
 	outputs := map[string]digestOutput{}
 	for name, oc := range plan.OutputChanges {

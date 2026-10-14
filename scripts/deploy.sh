@@ -65,7 +65,7 @@ out="$work/output"
 # lines.
 report() {
 	local trimmed
-	trimmed="$(grep -E '^(Plan:|Apply complete!|No changes\.|Changes to Outputs:|  # |[^ ]+: (Creating|Modifying|Destroying|Refreshing state|Reading|Read complete|Still |Creation complete|Modifications complete|Destruction complete))' "$out" |
+	trimmed="$(grep -E '^(Plan:|Apply complete!|No changes\.|Changes to Outputs:|  # |[^ ]+: (Creating|Modifying|Destroying|Refreshing state|Reading|Read complete|Still |Creation complete|Modifications complete|Destruction complete|Importing|Import complete))' "$out" |
 		sed -E 's/ \[id=[^]]*\]//' || true)"
 	{
 		printf '## OpenTofu %s\n\n' "$1"
