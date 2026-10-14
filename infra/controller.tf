@@ -301,6 +301,8 @@ resource "aws_cloudwatch_metric_alarm" "controller_failing" {
 # A stop that fails, times out or is cancelled leaves the host running (ADR
 # 0006), so Systems Manager's status event for it notifies the workloads
 # us-west-2 alerts topic, whose policy lets EventBridge publish (aws-setup).
+# The API spells a cancelled command "Cancelled" and the user guide
+# "Canceled", and AWS doesn't say which the event carries, so both match.
 resource "aws_cloudwatch_event_rule" "stop_failed" {
   name        = "foundry-stop-failed"
   description = "A Foundry stop from The Lobby failed - the host is still running. See docs/operations.md."
@@ -309,7 +311,7 @@ resource "aws_cloudwatch_event_rule" "stop_failed" {
     "detail-type" = ["EC2 Command Status-change Notification"]
     detail = {
       "document-name" = [aws_ssm_document.stop.name]
-      status          = ["Failed", "TimedOut", "Cancelled"]
+      status          = ["Failed", "TimedOut", "Cancelled", "Canceled"]
     }
   })
 }

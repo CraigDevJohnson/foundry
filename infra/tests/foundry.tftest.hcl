@@ -718,7 +718,7 @@ run "a_failed_stop_alerts" {
       "detail-type" = ["EC2 Command Status-change Notification"]
       detail = {
         "document-name" = ["foundry-stop"]
-        status          = ["Failed", "TimedOut", "Cancelled"]
+        status          = ["Failed", "TimedOut", "Cancelled", "Canceled"]
       }
     }
     error_message = "A foundry-stop command that fails, times out or is cancelled must match the alert rule."
