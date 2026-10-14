@@ -143,8 +143,8 @@ func TestStartStartsAStoppedHost(t *testing.T) {
 		t.Errorf("logs %s", logs)
 	}
 
-	// EC2 may already report it running when someone else started it first;
-	// it is still starting until the next status says otherwise.
+	// EC2 may report it running by the time it answers; it is still starting
+	// until the next status says otherwise.
 	change = &changer{startState: "running"}
 	h, _ = changeServer(fixed(report("stopped", "not_checked", "not_checked", hourAgo)), change)
 	if a := decodeStatus(t, post(h, "/server/start", ""), http.StatusAccepted); a.State != Starting || a.Checks["host"] != "running" {
@@ -230,10 +230,22 @@ func TestStartLeavesOtherHostsAlone(t *testing.T) {
 // is reported without its detail, which goes to the log.
 func TestStartFailures(t *testing.T) {
 	stopped := fixed(report("stopped", "not_checked", "not_checked", hourAgo))
-	h, _ := changeServer(stopped, &changer{startErr: control.ErrNotStopped})
+	h, logs := changeServer(stopped, &changer{startState: "stopping", startErr: control.ErrNotStopped})
 	checkCode(t, post(h, "/server/start", ""), http.StatusConflict, "stopping")
+	if !strings.Contains(logs.String(), `"level":"INFO","msg":"start","outcome":"refused_stopping"`) || !strings.Contains(logs.String(), `"now":"stopping"`) {
+		t.Errorf("logs %s", logs)
+	}
 
-	h, logs := changeServer(stopped, &changer{startErr: errors.New("sensitive provider detail")})
+	// A second look that couldn't read the host still refuses, and the line
+	// is a warning that says why.
+	looked := fmt.Errorf("%w; looking at the host again: %w", control.ErrNotStopped, errors.New("access denied"))
+	h, logs = changeServer(stopped, &changer{startState: "", startErr: looked})
+	checkCode(t, post(h, "/server/start", ""), http.StatusConflict, "stopping")
+	if !strings.Contains(logs.String(), `"level":"WARN","msg":"start","outcome":"refused_stopping"`) || !strings.Contains(logs.String(), "access denied") {
+		t.Errorf("logs %s", logs)
+	}
+
+	h, logs = changeServer(stopped, &changer{startErr: errors.New("sensitive provider detail")})
 	checkCode(t, post(h, "/server/start", ""), http.StatusServiceUnavailable, "start_failed")
 	if !strings.Contains(logs.String(), `"level":"ERROR","msg":"start","outcome":"failed"`) || !strings.Contains(logs.String(), "sensitive provider detail") {
 		t.Errorf("logs %s", logs)

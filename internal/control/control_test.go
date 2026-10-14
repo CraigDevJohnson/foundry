@@ -33,7 +33,7 @@ func (f startFunc) StartInstances(ctx context.Context, in *ec2.StartInstancesInp
 }
 
 func (f startFunc) DescribeInstances(context.Context, *ec2.DescribeInstancesInput, ...func(*ec2.Options)) (*ec2.DescribeInstancesOutput, error) {
-	return nil, errors.New("a start EC2 didn't refuse for the host's state must not look again")
+	panic("only a start EC2 refused for the host's state may look at the host again")
 }
 
 func (f startFunc) CreateTags(context.Context, *ec2.CreateTagsInput, ...func(*ec2.Options)) (*ec2.CreateTagsOutput, error) {
@@ -132,6 +132,7 @@ func TestStartFailures(t *testing.T) {
 		want   error
 	}{
 		{"other failure", nil, failure, failure},
+		{"timed out", nil, context.DeadlineExceeded, context.DeadlineExceeded},
 		{"nil", nil, nil, nil},
 		{"empty", &ec2.StartInstancesOutput{}, nil, nil},
 		{"foreign", foreign, nil, nil},
@@ -158,53 +159,92 @@ func described(id string, state ec2types.InstanceStateName) *ec2.DescribeInstanc
 }
 
 // When EC2 refuses the start for the host's state, Start looks at only the
-// configured host again, on its own time. A host another start got to first,
-// now starting or running, is ErrStartedElsewhere with its state; anything
-// else, including no clear answer, is ErrNotStopped.
+// configured host again, within the request's time. A host another start got
+// to first, now starting or running, is ErrStartedElsewhere with its state;
+// any other state is ErrNotStopped with that state, and a look that can't
+// read the host is ErrNotStopped with what went wrong.
 func TestARefusedStartLooksAgain(t *testing.T) {
 	noState := described(instanceID, ec2types.InstanceStateNamePending)
 	noState.Reservations[0].Instances[0].State = nil
 	two := described(instanceID, ec2types.InstanceStateNamePending)
 	two.Reservations[0].Instances = append(two.Reservations[0].Instances, two.Reservations[0].Instances[0])
+	failure := errors.New("provider failure")
 	for _, test := range []struct {
 		name   string
 		output *ec2.DescribeInstancesOutput
 		err    error
 		state  string
 		want   error
+		failed bool // whether the second look failed to read the host
 	}{
-		{"started elsewhere", described(instanceID, ec2types.InstanceStateNamePending), nil, "pending", ErrStartedElsewhere},
-		{"already running", described(instanceID, ec2types.InstanceStateNameRunning), nil, "running", ErrStartedElsewhere},
-		{"still stopping", described(instanceID, ec2types.InstanceStateNameStopping), nil, "", ErrNotStopped},
-		{"stopped", described(instanceID, ec2types.InstanceStateNameStopped), nil, "", ErrNotStopped},
-		{"shutting down", described(instanceID, ec2types.InstanceStateNameShuttingDown), nil, "", ErrNotStopped},
-		{"describe failed", nil, errors.New("provider failure"), "", ErrNotStopped},
-		{"nil", nil, nil, "", ErrNotStopped},
-		{"empty", &ec2.DescribeInstancesOutput{}, nil, "", ErrNotStopped},
-		{"foreign", described("i-fffffffffffffffff", ec2types.InstanceStateNamePending), nil, "", ErrNotStopped},
-		{"no state", noState, nil, "", ErrNotStopped},
-		{"two", two, nil, "", ErrNotStopped},
+		{"started elsewhere", described(instanceID, ec2types.InstanceStateNamePending), nil, "pending", ErrStartedElsewhere, false},
+		{"already running", described(instanceID, ec2types.InstanceStateNameRunning), nil, "running", ErrStartedElsewhere, false},
+		{"still stopping", described(instanceID, ec2types.InstanceStateNameStopping), nil, "stopping", ErrNotStopped, false},
+		{"stopped", described(instanceID, ec2types.InstanceStateNameStopped), nil, "stopped", ErrNotStopped, false},
+		{"shutting down", described(instanceID, ec2types.InstanceStateNameShuttingDown), nil, "shutting-down", ErrNotStopped, false},
+		{"describe failed", nil, failure, "", failure, true},
+		{"nil", nil, nil, "", ErrNotStopped, true},
+		{"empty", &ec2.DescribeInstancesOutput{}, nil, "", ErrNotStopped, true},
+		{"foreign", described("i-fffffffffffffffff", ec2types.InstanceStateNamePending), nil, "", ErrNotStopped, true},
+		{"no state", noState, nil, "", ErrNotStopped, true},
+		{"two", two, nil, "", ErrNotStopped, true},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			ctx, cancel := context.WithCancel(context.Background())
+			request, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+			requestDeadline, _ := request.Deadline()
 			s := &Service{InstanceID: instanceID, EC2: refusedStart(func(ctx context.Context, in *ec2.DescribeInstancesInput) (*ec2.DescribeInstancesOutput, error) {
 				if len(in.InstanceIds) != 1 || in.InstanceIds[0] != instanceID || len(in.Filters) != 0 {
 					t.Errorf("unscoped describe: %+v", in)
 				}
-				deadline, ok := ctx.Deadline()
-				if ctx.Err() != nil || !ok || time.Until(deadline) > RecheckTimeout {
-					t.Errorf("not on its own bounded time: %v %v", ctx.Err(), deadline)
+				checkDeadline(t, ctx)
+				if deadline, _ := ctx.Deadline(); deadline.After(requestDeadline) {
+					t.Errorf("the look outlives the request: %v after %v", deadline, requestDeadline)
 				}
 				return test.output, test.err
 			})}
-			// The request is already cancelled when the start is refused:
-			// the look must still get its own time.
-			cancel()
-			state, err := s.Start(ctx)
+			state, err := s.Start(request)
 			if state != test.state || !errors.Is(err, test.want) {
 				t.Fatalf("%q %v, want %q %v", state, err, test.state, test.want)
 			}
+			if test.failed != (err != ErrStartedElsewhere && err != ErrNotStopped) || (test.failed && !errors.Is(err, ErrNotStopped)) {
+				t.Fatalf("a failed look must be ErrNotStopped with what went wrong, a look that read the host plain: %v", err)
+			}
 		})
+	}
+
+	// A request with no time left can't look again, and the start stays
+	// refused.
+	request, cancel := context.WithCancel(context.Background())
+	cancel()
+	s := &Service{InstanceID: instanceID, EC2: refusedStart(func(ctx context.Context, _ *ec2.DescribeInstancesInput) (*ec2.DescribeInstancesOutput, error) {
+		return nil, ctx.Err()
+	})}
+	if state, err := s.Start(request); state != "" || !errors.Is(err, ErrNotStopped) || !errors.Is(err, context.Canceled) {
+		t.Fatalf("%q %v", state, err)
+	}
+}
+
+// EC2 can also accept a start for a host another start already got to,
+// answering with the state it was in before: pending or running is
+// ErrStartedElsewhere with the state EC2 reports now.
+func TestAnAcceptedStartAfterAnother(t *testing.T) {
+	for _, test := range []struct {
+		previous, current ec2types.InstanceStateName
+		want              error
+	}{
+		{ec2types.InstanceStateNameStopped, ec2types.InstanceStateNamePending, nil},
+		{ec2types.InstanceStateNamePending, ec2types.InstanceStateNamePending, ErrStartedElsewhere},
+		{ec2types.InstanceStateNameRunning, ec2types.InstanceStateNameRunning, ErrStartedElsewhere},
+	} {
+		output := starting(instanceID, test.current)
+		output.StartingInstances[0].PreviousState = &ec2types.InstanceState{Name: test.previous}
+		s := &Service{InstanceID: instanceID, EC2: startFunc(func(context.Context, *ec2.StartInstancesInput) (*ec2.StartInstancesOutput, error) {
+			return output, nil
+		})}
+		if state, err := s.Start(context.Background()); state != string(test.current) || err != test.want {
+			t.Fatalf("from %s: %q %v", test.previous, state, err)
+		}
 	}
 }
 

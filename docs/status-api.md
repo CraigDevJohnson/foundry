@@ -105,8 +105,9 @@ that record says, even when Systems Manager no longer keeps it.
   `pending` or `running` with no stop under way, whatever its `state`. A start
   never restarts Foundry on a running host. The same goes when another start,
   such as the other site environment's, reached the host after it was seen
-  stopped: EC2 refuses this one, the controller looks at the host again, and
-  answers `200` with `state` `starting` and the checks as for `202`.
+  stopped, whether EC2 then accepts this start for a host already starting
+  or refuses it and a second look finds the host starting or running: the
+  answer is `200` with `state` `starting` and the checks as for `202`.
 - `409` with `{"code": "stopping"}` while the host is stopping or a stop is
   under way, including when EC2 refuses the start and a second look finds the
   host neither starting nor running, or can't tell. Start it once it is
@@ -225,8 +226,8 @@ limit. A start or a stop gets 6 seconds in all: at most 4 for the observation,
 and the rest for the one EC2 or Systems Manager call. A stop that was sent is
 then recorded on the host's tags with 2 seconds of its own, even when those 6
 are spent, because only a recorded stop can be followed. A start EC2 refused
-for the host's state gets the same 2 seconds for its second look at the host
-with `DescribeInstances`. The Lambda timeout is 10 seconds. A call cut off by the bound reports `unknown` (or `unreachable` for
+for the host's state looks at the host again with `DescribeInstances` inside
+the same 6 seconds. The Lambda timeout is 10 seconds. A call cut off by the bound reports `unknown` (or `unreachable` for
 the probe), never a guess.
 
 The probe verifies TLS, follows no redirects and reads at most 64 KiB of the
@@ -241,9 +242,12 @@ function's log group. Each `GET /server` writes a `status` line with the
 reported state, each check and its reason, the join page's HTTP status and the
 agent's last ping. Each start and stop writes a `start` or `stop` line ([Who
 asked](#who-asked)) with its outcome (`started`, `started_elsewhere`, `sent`,
-`unchanged`, `refused_stopping`, `refused_starting`, `refused_agent_offline`, `no_server`,
-`status_unknown` or `failed`, with the error), the host and stop checks with
-their reasons, EC2's state after a start and the stop's command ID. Reasons are fixed categories: `observed`, `no_record`,
+`sent_not_recorded`, `unchanged`, `confirmation_required`,
+`refused_stopping`, `refused_starting`, `refused_agent_offline`,
+`no_server`, `status_unknown` or `failed`, with the error), the host and stop
+checks with their reasons, EC2's state after a start and the stop's command
+ID. A `refused_stopping` start whose second look at the host failed is a
+warning and says why. Reasons are fixed categories: `observed`, `no_record`,
 `unexpected_record`, `unexpected_state`, `access_denied`, `timeout`,
 `canceled`, `provider_error`, `unexpected_status`, `response_too_large`,
 `tls_error`, `network_error`, `response_error`, `host_not_running`,

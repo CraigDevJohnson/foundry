@@ -16,7 +16,7 @@ restores and the license) is in [docs/operations.md](../docs/operations.md).
 | `host.tf` | The workloads host: `foundry-host` role (SSM default instance policy, `ssm:GetParameter*` on `parameter/foundry` and `parameter/foundry/*` only, no KMS; exclusive lists for both managed and inline policies) and instance profile, the t4g.small instance (IMDSv2, no key pair, encrypted 10 GiB gp3 root), the 20 GiB `foundry-data` volume with `prevent_destroy`, the Elastic IP with `prevent_destroy`, and the `StatusCheckFailed` alarm to the workloads `alerts` topic (D18) |
 | `backups.tf` | The workloads `foundry-dlm` role and snapshot policy: both volumes tagged `project=foundry`, daily at 10:00 UTC keeping 7, weekly on Sunday at 11:00 UTC keeping 4 |
 | `ci.tf` | What the Host control workflow's `foundry-host-control-ci` role may do (`bootstrap/` makes the role): only describe instances, start and stop the host, and run the parameterless `foundry-shutdown` SSM document (`templates/foundry-shutdown.sh`) on it. A `removed` block hands the role, which this root made first, to `bootstrap/` without deleting it |
-| `controller.tf` | The controller The Lobby's Foundry Tool calls ([ADR 0005](../docs/adr/0005-the-lobby-calls-the-controller-through-a-function-url.md), [ADR 0006](../docs/adr/0006-the-lobby-starts-and-stops-the-host.md)), once per site environment: the `foundry-<env>-controller` Lambda (Go, provided.al2023, arm64) with its log group (30 days), the inline policy of its role, which `bootstrap/` makes inside `foundry-workload-boundary` (own log streams; `ec2:DescribeInstances`, `ssm:DescribeInstanceInformation` and `ssm:GetCommandInvocation`; `ec2:StartInstances` on the host; `ssm:SendCommand` of `foundry-stop` to the host; `ec2:CreateTags` on the host for the two stop tags only; exclusive lists for both managed and inline policies), an `AWS_IAM` Function URL granted only to `site-<env>-server`, and the `foundry-<env>-controller-failing` alarm on Lambda errors to the workloads `alerts` topic. Shared by both: the parameterless `foundry-stop` document (`templates/foundry-stop.sh.tftpl`: it runs `templates/foundry-shutdown.sh` from a file of its own, then `templates/foundry-power-off.sh` only if the shutdown exits 0) and the `foundry-stop-failed` EventBridge rule, which sends a failed, timed-out or cancelled stop to the same topic |
+| `controller.tf` | The controller The Lobby's Foundry Tool calls ([ADR 0005](../docs/adr/0005-the-lobby-calls-the-controller-through-a-function-url.md), [ADR 0006](../docs/adr/0006-the-lobby-starts-and-stops-the-host.md)), once per site environment: the `foundry-<env>-controller` Lambda (Go, provided.al2023, arm64) with its log group (30 days), the inline policy of its role, which `bootstrap/` makes inside `foundry-workload-boundary` (own log streams; `ec2:DescribeInstances`, `ssm:DescribeInstanceInformation` and `ssm:GetCommandInvocation`; `ec2:StartInstances` on the host; `ssm:SendCommand` of `foundry-stop` to the host; `ec2:CreateTags` on the host for the two stop tags only; exclusive lists for both managed and inline policies), an `AWS_IAM` Function URL granted only to `site-<env>-server`, and the `foundry-<env>-controller-failing` alarm on Lambda errors to the workloads `alerts` topic. Shared by both: the parameterless `foundry-stop` document (`templates/foundry-stop.sh.tftpl`: it runs `templates/foundry-shutdown.sh` from a file of its own, then `templates/foundry-power-off.sh` only if the shutdown exits 0) and the `foundry-stop-failed` EventBridge rule, which sends a failed, timed-out or cancelled stop to the same topic. A `removed` block forgets the controllers' roles without deleting them, for `bootstrap/` to adopt, if an earlier apply of this root made them |
 | `templates/` | The `foundry-shutdown` script, first-boot user data (no secrets, never formats a disk) and the certbot deploy hook it installs |
 | `outputs.tf` | Instance, Elastic IP, root volume, data volume, Availability Zone and security group IDs for the runbook, and the controller's URLs and function ARNs per site environment for the-lobby |
 | `variables.tf` | `ami_id` (AL2023 arm64; the instance ignores later changes). Change it only by committing a new default, never with `-var`, so every plan sees the same value. `controller_package_path`, the controller's zip, relative to `infra/` (default `../dist/bootstrap.zip`, which `task build` writes). `aws_profile`, the named profile for the backend and provider (default `workloads-admin`) |
@@ -131,7 +131,8 @@ tofu -chdir=infra/bootstrap init
 tofu -chdir=infra/bootstrap plan -out=bootstrap.tfplan
 ```
 
-The first plan imports 1, adds 7 and changes 1. It adds the boundary, the
+The first plan imports 1, adds 7 and changes 1 (3, 5 and 3 if an apply of
+the infra root already made the controllers' roles). It adds the boundary, the
 deploy role, its inline policy, its two exclusive lists and the two
 controllers' roles. It imports `foundry-host-control-ci`, which the infra root
 made first, and changes it in place to put it inside the boundary. After
@@ -142,8 +143,8 @@ import, 2 to add and 2 to change: the same import, the controllers' roles,
 and the deploy role's inline policy. The bootstrap adopts whichever of the
 three roles already exist and makes the rest, so if an apply of the infra
 root made the controllers' roles first, it imports them too and changes them
-to put them inside the boundary (3 to import, 0 to add and 4 to change,
-over that earlier bootstrap).
+in place, adding the boundary if they lack it (3 to import, 0 to add and 4 to
+change, over that earlier bootstrap).
 
 The first Deploy plan after that forgets `foundry-host-control-ci` without
 deleting it, since `bootstrap/` now holds it, and so the controllers' roles

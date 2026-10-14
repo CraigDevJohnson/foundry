@@ -55,8 +55,8 @@ locals {
 }
 
 # infra/bootstrap makes the controllers' roles. An apply of this root from
-# before the deploy role would have made them here, so a state that holds them
-# forgets them without deleting them, and the bootstrap adopts them.
+# before the roles moved there would have made them here, so a state that
+# holds them forgets them without deleting them, and the bootstrap adopts them.
 removed {
   from = aws_iam_role.controller
 

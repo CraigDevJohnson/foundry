@@ -36,8 +36,8 @@ data "aws_iam_policy_document" "controller_trust" {
 }
 
 # The roles may already exist. The infra root made foundry-host-control-ci
-# before this root did, and an apply of the infra root from before the deploy
-# role would have made the controllers' roles. So this root adopts whichever
+# before this root did, and an apply of the infra root from before the roles
+# moved here would have made the controllers' roles. So this root adopts whichever
 # of the three exist and makes the rest, and the infra root forgets them
 # (infra/ci.tf, infra/controller.tf). The offline tests mock this list empty:
 # `tofu test` can't import.

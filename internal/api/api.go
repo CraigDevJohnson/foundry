@@ -28,8 +28,9 @@ const (
 	// gives up at 7 seconds and its router at 8.
 	ObserveTimeout = 6 * time.Second
 	// ChangeTimeout bounds a whole start or stop: the observation, then the
-	// one EC2 or Systems Manager call, inside the site's 7 seconds. A sent
-	// stop's record has control.RecordTimeout beyond it.
+	// one EC2 or Systems Manager call, and for a start EC2 refused a second
+	// look at the host, inside the site's 7 seconds. A sent stop's record has
+	// control.RecordTimeout beyond it.
 	ChangeTimeout = 6 * time.Second
 	// changeObserveTimeout is the observation's share of ChangeTimeout, which
 	// leaves the change itself at least 2 seconds.
@@ -285,7 +286,13 @@ func (h *Handler) start(w http.ResponseWriter, r *http.Request) {
 		h.logChange(ctx, slog.LevelInfo, "start", "started_elsewhere", who, report, "now", current)
 		httpStatus = http.StatusOK
 	case errors.Is(err, control.ErrNotStopped):
-		h.logChange(ctx, slog.LevelInfo, "start", "refused_stopping", who, report)
+		// EC2 refused the start for the host's state, and a second look found
+		// it neither starting nor running, or couldn't read it.
+		level := slog.LevelInfo
+		if err != control.ErrNotStopped {
+			level = slog.LevelWarn
+		}
+		h.logChange(ctx, level, "start", "refused_stopping", who, report, "now", current, "err", err.Error())
 		writeJSON(w, http.StatusConflict, map[string]string{"code": "stopping"})
 		return
 	case err != nil:

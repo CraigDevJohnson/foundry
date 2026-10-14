@@ -33,19 +33,14 @@ const deliveryTimeoutSeconds = 60
 // The 6 seconds a change gets plus this stay inside the function's 10.
 const RecordTimeout = 2 * time.Second
 
-// RecheckTimeout bounds looking at the host again after EC2 refused a start.
-// Like RecordTimeout it runs on its own time, and a start never records a
-// stop, so the 6 seconds a change gets plus this stay inside the function's 10.
-const RecheckTimeout = 2 * time.Second
-
 var (
 	// ErrNotStopped means EC2 refused the start because the host is not
 	// stopped yet, for example while it is still stopping.
 	ErrNotStopped = errors.New("EC2 can't start the host in its current state")
-	// ErrStartedElsewhere means EC2 refused the start because the host had
-	// already left stopped and is starting or running: another start, such
-	// as the other site environment's, got there first. Start returns the
-	// state EC2 reported with it.
+	// ErrStartedElsewhere means the host had already left stopped and is
+	// starting or running when this start reached EC2: another start, such as
+	// the other site environment's, got there first. Start returns the state
+	// EC2 reported with it.
 	ErrStartedElsewhere = errors.New("another start got to the host first")
 	// ErrAgentOffline means Systems Manager has no connected agent on the
 	// host to send the stop to, for example right after it booted.
@@ -75,30 +70,45 @@ type Service struct {
 	Now func() time.Time
 }
 
-// Start asks EC2 to start the host and returns the state EC2 reports for it
-// afterwards, normally pending. It is asked once: a retry after an answer that
-// was lost would find the host already starting, and could report it as
-// refused. When EC2 refuses it for the host's state, Start looks at the host
-// again, because another start may have got there first since the host was
-// observed stopped: a host now starting or running is ErrStartedElsewhere,
-// anything else ErrNotStopped.
+// Start asks EC2 to start the host, which was observed stopped, and returns
+// the state EC2 reports for it afterwards, normally pending. It is asked
+// once, so a host EC2 finds already starting or running was started by
+// someone else since it was observed, such as the other site environment:
+// that is ErrStartedElsewhere, whether EC2 accepts this start or refuses it
+// for the host's state. On a refusal Start looks at the host again, within
+// ctx, to tell the two apart; a host in any other state, or one the second
+// look can't read, is ErrNotStopped.
 func (s *Service) Start(ctx context.Context) (string, error) {
-	ctx, cancel := context.WithTimeout(ctx, status.ProviderTimeout)
+	startCtx, cancel := context.WithTimeout(ctx, status.ProviderTimeout)
 	defer cancel()
-	output, err := s.EC2.StartInstances(ctx, &ec2.StartInstancesInput{InstanceIds: []string{s.InstanceID}}, func(o *ec2.Options) { o.RetryMaxAttempts = 1 })
+	output, err := s.EC2.StartInstances(startCtx, &ec2.StartInstancesInput{InstanceIds: []string{s.InstanceID}}, func(o *ec2.Options) { o.RetryMaxAttempts = 1 })
 	if err != nil {
-		if code(err) == "IncorrectInstanceState" {
-			if state := s.hostState(ctx); state == string(ec2types.InstanceStateNamePending) || state == string(ec2types.InstanceStateNameRunning) {
-				return state, ErrStartedElsewhere
-			}
-			return "", ErrNotStopped
+		if code(err) != "IncorrectInstanceState" {
+			return "", err
 		}
-		return "", err
+		state, err := s.hostState(ctx)
+		switch {
+		case err != nil:
+			return "", fmt.Errorf("%w; looking at the host again: %w", ErrNotStopped, err)
+		case startedElsewhere(state):
+			return state, ErrStartedElsewhere
+		}
+		return state, ErrNotStopped
 	}
 	if output == nil || len(output.StartingInstances) != 1 || aws.ToString(output.StartingInstances[0].InstanceId) != s.InstanceID || output.StartingInstances[0].CurrentState == nil {
 		return "", errors.New("EC2 answered the start with an unexpected record")
 	}
-	return string(output.StartingInstances[0].CurrentState.Name), nil
+	change := output.StartingInstances[0]
+	if change.PreviousState != nil && startedElsewhere(string(change.PreviousState.Name)) {
+		return string(change.CurrentState.Name), ErrStartedElsewhere
+	}
+	return string(change.CurrentState.Name), nil
+}
+
+// startedElsewhere says whether a host found in this state, after it was
+// observed stopped, was started by someone else.
+func startedElsewhere(state string) bool {
+	return state == string(ec2types.InstanceStateNamePending) || state == string(ec2types.InstanceStateNameRunning)
 }
 
 // Stop sends the stop document to the host, records it on the host's tags
@@ -144,20 +154,20 @@ func (s *Service) Stop(ctx context.Context) (string, error) {
 	return command, nil
 }
 
-// hostState reads the host's state from EC2 on its own time, or returns ""
-// when EC2 doesn't answer with the host.
-func (s *Service) hostState(ctx context.Context) string {
-	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), RecheckTimeout)
+// hostState reads the host's state from EC2 within ctx, with a provider
+// call's usual limit.
+func (s *Service) hostState(ctx context.Context) (string, error) {
+	ctx, cancel := context.WithTimeout(ctx, status.ProviderTimeout)
 	defer cancel()
 	output, err := s.EC2.DescribeInstances(ctx, &ec2.DescribeInstancesInput{InstanceIds: []string{s.InstanceID}})
-	if err != nil || output == nil || len(output.Reservations) != 1 || len(output.Reservations[0].Instances) != 1 {
-		return ""
+	if err != nil {
+		return "", err
 	}
-	instance := output.Reservations[0].Instances[0]
-	if aws.ToString(instance.InstanceId) != s.InstanceID || instance.State == nil {
-		return ""
+	if output == nil || len(output.Reservations) != 1 || len(output.Reservations[0].Instances) != 1 ||
+		aws.ToString(output.Reservations[0].Instances[0].InstanceId) != s.InstanceID || output.Reservations[0].Instances[0].State == nil {
+		return "", errors.New("EC2 described the host with an unexpected record")
 	}
-	return string(instance.State.Name)
+	return string(output.Reservations[0].Instances[0].State.Name), nil
 }
 
 func (s *Service) now() time.Time {
