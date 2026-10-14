@@ -237,6 +237,8 @@ removes the host, detaches its data volume, which stops the host first, or
 changes a setting the AWS provider changes only on a stopped instance, which
 it stops and starts again around the change: the host's type, user data, CPU
 options or capacity reservation. A bigger instance type is such a change too.
+Run the Deploy plan once the host is stopped, because stopping it can change
+the plan's digest.
 
 A Deploy plan with **Rebuild host** checked (`-replace=aws_instance.host`)
 keeps the data volume and the Elastic IP (both have `prevent_destroy`), and

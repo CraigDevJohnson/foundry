@@ -338,9 +338,10 @@ func (h *Handler) stop(w http.ResponseWriter, r *http.Request) {
 		h.logChange(ctx, slog.LevelInfo, "stop", "no_server", who, report)
 		writeJSON(w, http.StatusNotFound, map[string]string{"code": "no_server"})
 		return
-	case state == Unknown:
+	case state == Unknown || (report.Host.State == "running" && report.Host.LaunchTime.IsZero()):
 		// Without the stop recorded on a running host, a second one could
-		// overlap the first; nothing is sent.
+		// overlap the first; and without a start time to place it against,
+		// the status couldn't follow this one. Nothing is sent.
 		h.logChange(ctx, slog.LevelWarn, "stop", "status_unknown", who, report)
 		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"code": "status_unknown"})
 		return

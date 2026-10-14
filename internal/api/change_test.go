@@ -297,7 +297,6 @@ func TestStopStopsARunningHost(t *testing.T) {
 		{"unresponsive", report("running", "offline", "unreachable", hourAgo)},
 		{"after a failed stop", withStop(readyHost, "failed", recently)},
 		{"a stop that never powered off", withStop(report("running", "online", "unreachable", hourAgo), "succeeded", longAgo)},
-		{"no start time and no stop recorded", report("running", "online", "responding", time.Time{})},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			change := &changer{}
@@ -318,7 +317,8 @@ func TestStopStopsARunningHost(t *testing.T) {
 
 // A host already stopped or stopping, or with a stop under way, is left as it
 // is; one still starting is refused; and with the stops unreadable nothing is
-// sent, so two stops never overlap.
+// sent, so two stops never overlap. Nor is a stop sent that the status
+// couldn't follow, for want of a start time.
 func TestStopLeavesOtherHostsAlone(t *testing.T) {
 	for _, test := range []struct {
 		name   string
@@ -334,6 +334,7 @@ func TestStopLeavesOtherHostsAlone(t *testing.T) {
 		{"pending", report("pending", "not_checked", "not_checked", recently), http.StatusConflict, "starting"},
 		{"stops unreadable", withStop(readyHost, "unknown", time.Time{}), http.StatusServiceUnavailable, "status_unknown"},
 		{"stop recorded without a start time", withStop(report("running", "online", "responding", time.Time{}), "not_checked", time.Time{}), http.StatusServiceUnavailable, "status_unknown"},
+		{"no start time and no stop recorded", report("running", "online", "responding", time.Time{}), http.StatusServiceUnavailable, "status_unknown"},
 		{"EC2 unreadable", report("unknown", "not_checked", "not_checked", time.Time{}), http.StatusServiceUnavailable, "status_unknown"},
 		{"terminated", report("terminated", "not_checked", "not_checked", hourAgo), http.StatusNotFound, "no_server"},
 	} {

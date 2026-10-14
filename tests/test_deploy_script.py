@@ -38,25 +38,31 @@ printf '%s\n' "$STUB_DIGEST"
 '''
 
 
-def plan_json(actions, state, before=None, after=None, attachment=('no-op',)):
+HOST_ID = 'i-0123456789abcdef0'
+
+
+def plan_json(actions, state, before=None, after=None, attachment=('no-op',), address='aws_instance.host'):
     """A saved plan's JSON with one change to the host and its data volume's
     attachment, and the host as the plan's refresh found it."""
-    before = {'instance_state': state, 'instance_type': 't4g.small', **(before or {})}
+    before = {'id': HOST_ID, 'instance_state': state, 'instance_type': 't4g.small', **(before or {})}
     after = {**before, **(after or {})}
     return {
         'prior_state': {'values': {'root_module': {'resources': [{
-            'address': 'aws_instance.host',
+            'address': address,
+            'mode': 'managed',
             'type': 'aws_instance',
-            'values': {'instance_state': state},
+            'values': {'id': HOST_ID, 'instance_state': state},
         }]}}},
         'resource_changes': [{
-            'address': 'aws_instance.host',
+            'address': address,
+            'mode': 'managed',
             'type': 'aws_instance',
             'change': {'actions': actions, 'before': before, 'after': after},
         }, {
             'address': 'aws_volume_attachment.data',
+            'mode': 'managed',
             'type': 'aws_volume_attachment',
-            'change': {'actions': list(attachment)},
+            'change': {'actions': list(attachment), 'before': {'instance_id': HOST_ID}},
         }],
     }
 
@@ -117,10 +123,21 @@ class DeployScriptTests(unittest.TestCase):
         self.assertFalse(self.applied())
 
     def test_a_plan_says_to_stop_the_host_first(self):
+        # Stopping the host can change the digest, so the plan to apply is a
+        # new one made once the host is stopped.
         result = self.deploy('plan', plan_json(['create', 'delete'], 'running'), approved='')
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
-        self.assertIn("Stop it first with Host control's stop", self.summary.read_text())
+        summary = self.summary.read_text()
+        self.assertIn("Stop it first with Host control's stop", summary)
+        self.assertIn('run Deploy again with mode `plan`', summary)
+        self.assertNotIn('To apply exactly this plan', summary)
         self.assertFalse(self.applied())
+
+    def test_a_plan_that_leaves_the_host_running_says_how_to_apply_it(self):
+        result = self.deploy('plan', plan_json(['update'], 'running', after={'tags': {'Name': 'foundry'}}), approved='')
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn(f'To apply exactly this plan, run Deploy again with mode `apply` and plan `{DIGEST}`',
+                      self.summary.read_text())
 
     def test_an_apply_replaces_a_stopped_host(self):
         result = self.deploy('apply', plan_json(['delete', 'create'], 'stopped'))
@@ -158,6 +175,18 @@ class DeployScriptTests(unittest.TestCase):
         result = self.deploy('apply', plan_json(['update'], 'stopped', after={'instance_type': 't4g.medium'}))
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         self.assertTrue(self.applied())
+
+    def test_an_apply_refuses_to_resize_a_moved_host(self):
+        for address in ('aws_instance.foundry', 'module.host.aws_instance.host'):
+            with self.subTest(address=address):
+                plan = plan_json(['update'], 'running', after={'instance_type': 't4g.medium'}, address=address)
+                if address.startswith('module.'):
+                    root = plan['prior_state']['values']['root_module']
+                    root['child_modules'] = [{'address': 'module.host', 'resources': root.pop('resources')}]
+                result = self.deploy('apply', plan)
+                self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+                self.assertFalse(self.applied())
+                self.assertIn('the plan stops a host that is not stopped', result.stderr)
 
     def test_an_apply_refuses_when_the_refresh_lost_the_host(self):
         plan = plan_json(['update'], 'running', after={'instance_type': 't4g.medium'})

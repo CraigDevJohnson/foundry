@@ -104,24 +104,29 @@ if ! "$tofu" -chdir="$root_dir/infra" show -json "$work/tfplan" >"$work/plan.jso
 	exit 1
 fi
 # What EC2 reported for the host at the plan's refresh, when applying the plan
-# stops the host; empty when it doesn't. The plan stops the host when it
-# replaces or destroys it; when it removes the data volume's attachment, which
-# stops the host before detaching (stop_instance_before_detaching); and when it
-# changes one of the host's settings that the AWS provider (6.66.0) changes
-# only on a stopped instance, stopping it and starting it again around the
-# change: its type, user data, CPU options or capacity reservation.
+# stops it; empty when it doesn't, and "unknown" when the refresh didn't find
+# it. The plan stops the host when it replaces or destroys it; when it removes
+# the data volume's attachment, which stops the host before detaching
+# (stop_instance_before_detaching); and when it changes one of the host's
+# settings that the AWS provider (6.66.0) changes only on a stopped instance,
+# stopping it and starting it again around the change: its type, user data,
+# CPU options or capacity reservation. The host is found by type, in any
+# module and under whatever address the plan moves it to.
 host_state_filter='
 def changed($names): .change as $change | any($names[]; $change.before[.] != $change.after[.]);
-def stops_host:
-	any(.resource_changes[]?;
-		(.address == "aws_instance.host" and
-			((.change.actions | index("delete")) or
-				(.change.actions == ["update"] and
-					changed(["instance_type", "user_data", "user_data_base64", "cpu_options", "capacity_reservation_specification"]))))
-		or (.type == "aws_volume_attachment" and (.change.actions | index("delete"))));
-if stops_host then
-	first(.prior_state.values.root_module.resources[]? | select(.address == "aws_instance.host") | .values.instance_state) // "unknown"
-else empty end'
+def modules: ., (.child_modules[]? | modules);
+[.prior_state.values.root_module? // empty | modules | .resources[]?] as $refreshed |
+def state(f): first($refreshed[] | select(.type == "aws_instance" and f) | .values.instance_state) // "unknown";
+[.resource_changes[]? |
+	if .type == "aws_instance" and
+		((.change.actions | index("delete")) or
+			(.change.actions == ["update"] and
+				changed(["instance_type", "user_data", "user_data_base64", "cpu_options", "capacity_reservation_specification"]))) then
+		.address as $address | state(.address == $address)
+	elif .type == "aws_volume_attachment" and (.change.actions | index("delete")) then
+		.change.before.instance_id as $id | state(.values.id == $id)
+	else empty end] |
+if length == 0 then empty else first(.[] | select(. != "stopped")) // "stopped" end'
 if ! host_state="$(jq -r "$host_state_filter" "$work/plan.json")"; then
 	printf '::error::the saved plan could not be read for the host'"'"'s state\n' >&2
 	exit 1
@@ -133,11 +138,14 @@ if [[ ${#plan_args[@]} -gt 0 ]]; then
 fi
 host_note=""
 if [[ -n "$host_state" && "$host_state" != stopped ]]; then
-	host_note="$(printf "This plan stops the host, which is \`%s\`: it replaces or removes it, detaches its data volume, or changes a setting EC2 changes only on a stopped host. Stop it first with Host control's stop, which shuts Foundry down cleanly, and run the apply once the host is \`stopped\`: until then an apply applies nothing." "$host_state")"
+	# Stopping the host can change the plan's digest, so the plan to apply is
+	# the one made once it is stopped.
+	host_note="$(printf "This plan stops the host, which is \`%s\`: it replaces or removes it, detaches its data volume, or changes a setting EC2 changes only on a stopped host. Until the host is \`stopped\`, an apply applies nothing. Stop it first with Host control's stop, which shuts Foundry down cleanly, then run Deploy again with mode \`plan\` and apply the digest that run posts." "$host_state")"
 fi
 if [[ "$mode" == plan ]]; then
 	if [[ -n "$host_note" ]]; then
 		printf '\n%s\n' "$host_note" | tee -a "${GITHUB_STEP_SUMMARY:-/dev/null}"
+		exit 0
 	fi
 	printf "\nTo apply exactly this plan, run Deploy again with mode \`apply\` and plan \`%s\`%s.\n" "$digest" "$rebuild_note" |
 		tee -a "${GITHUB_STEP_SUMMARY:-/dev/null}"

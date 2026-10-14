@@ -156,9 +156,11 @@ are ignored. Anything else answers `400` with
   after it booted. Nothing was sent.
 - `404` with `{"code": "no_server"}` as for `GET /server`.
 - `503` with `{"code": "status_unknown"}` when EC2's state, or the stop
-  recorded on the host, could not be read or checked: a second stop could overlap the
-  first, so none is sent. `{"code": "stop_failed"}` when Systems Manager
-  refused the command for another reason or its answer didn't arrive in time.
+  recorded on the host, could not be read or checked, or EC2 gave no start
+  time for the running host: a second stop could overlap the first, or the
+  status couldn't follow this one, so none is sent. `{"code": "stop_failed"}`
+  when Systems Manager refused the command for another reason or its answer
+  didn't arrive in time.
   The command may have been sent then, but without its ID the controller
   can't record it, so `checks.stop` doesn't show it and the status follows
   the host until it powers off. The controller retries nothing; a second

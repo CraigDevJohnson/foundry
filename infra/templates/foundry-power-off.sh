@@ -10,4 +10,6 @@ if ! shutdown --poweroff +1 "Foundry is stopped; the host powers off for The Lob
   echo "Could not schedule the power-off; Foundry is stopped but the host is still running" >&2
   exit 1
 fi
-echo "The host powers off in a minute"
+# The power-off is scheduled now, so a message that can't be written doesn't
+# fail the stop.
+echo "The host powers off in a minute" || true
