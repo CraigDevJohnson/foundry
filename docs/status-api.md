@@ -136,9 +136,11 @@ are ignored. Anything else answers `400` with
   powers off.
 - `200` with the current status when there is nothing to stop: the host is
   already `stopped` or `stopping`, or a stop is under way. So a stop requested
-  after another was sent answers this way and sends nothing; two requests at
-  the same moment can each send one, and the second finds Foundry already
-  down.
+  after another was sent answers this way and sends nothing. Two requests at
+  the same moment, such as one from each site environment, can each send
+  one. On the host only the first runs the shutdown; the second waits for it
+  and ends the same way, so the status shows the stop whichever of the two it
+  records.
 - `409` with `{"code": "starting"}` while EC2 reports the host `pending`.
   Stop it once it is running.
 - `409` with `{"code": "agent_offline"}` when the host has no connected

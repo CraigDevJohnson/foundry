@@ -21,9 +21,11 @@ credentials.
 A plan run posts the plan and its digest to the run summary. An apply run
 takes that digest, plans again and applies only a plan with the same digest
 (`scripts/deploy.sh`, `cmd/plandigest`), so it applies exactly the plan Craig
-read or nothing. The digest covers each changed resource's actions, the
-object it acts on, its planned values, any import or move into it and each
-changed output, and leaves out
+read or nothing. The digest covers the commit the plan was made from, so an
+apply runs only the code Craig planned, including what a plan doesn't show,
+such as a provisioner's commands. It also covers each changed resource's
+actions, the object it acts on, its planned values, any import or move into
+it and each changed output, and leaves out
 what only describes the present, so starting or stopping Foundry between the
 two runs doesn't change it unless the plan changes the host. A host rebuild
 (`-replace=aws_instance.host`) is a Deploy option the digest covers too.
@@ -47,11 +49,18 @@ What it may do is set by rules that hold whatever a commit to `main` says:
   permissions boundary, which it can never remove. The boundary allows only
   what those roles need on hosts tagged `project=foundry`, Foundry's own
   documents and log streams, and never IAM, a parameter or a key. So no role
-  the deploy role makes can do more than the controllers already do.
+  the deploy role makes can do more than the controllers already do. It
+  never assumes a role, so changing a role's trust lends it nothing.
 - **The host's and snapshot roles.** It may pass `foundry-host` to EC2 and
   `foundry-dlm` to Data Lifecycle Manager, so it can rebuild the host and
   keep the snapshot policy, but never change either role: the host's role
   reads Foundry's SecureStrings, which the boundary doesn't allow.
+- **What the host can reach.** Because it rebuilds the host, sets the host's
+  user data and writes the `foundry-stop` document the host runs, a run can
+  have the host do anything the host's role allows, including reading
+  Foundry's SecureStrings. The role's own rules don't stop that; what does is
+  that only a run Craig approves, of a plan he read from a commit on `main`,
+  holds the role.
 - **EC2.** Only the calls OpenTofu makes for the host, its data volume,
   Elastic IP and security group, in us-west-2, recorded from the provider's
   own requests. Each instance, volume, security group, rule or Elastic IP it
@@ -59,8 +68,11 @@ What it may do is set by rules that hold whatever a commit to `main` says:
   use only Foundry's security group, and it changes, tags or deletes only a
   resource already tagged `project=foundry`. It sets that tag only on a
   resource it is creating. It can make no other kind of EC2 resource, and
-  never changes the default VPC's network, a snapshot, an image or an
-  account-wide EC2 setting.
+  never changes the default VPC's network, a network interface's security
+  groups, a snapshot, an image or an account-wide EC2 setting. A host's
+  network interface carries no tag to check, so the one call that names one,
+  associating an Elastic IP, could move Foundry's address onto another
+  host's interface, though never another address.
 - **The rest.** Only `foundry-*` functions, log groups, alarms and documents,
   the `foundry-stop-failed` rule and the snapshot policy tagged
   `project=foundry`. A Function URL may only be `AWS_IAM`, an invoke grant may

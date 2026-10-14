@@ -84,7 +84,6 @@ locals {
     "ec2:DisassociateAddress",
     "ec2:ModifyInstanceAttribute",
     "ec2:ModifyInstanceMetadataOptions",
-    "ec2:ModifyNetworkInterfaceAttribute",
     "ec2:ModifySecurityGroupRules",
     "ec2:ModifyVolume",
     "ec2:ReleaseAddress",
@@ -630,6 +629,16 @@ data "aws_iam_policy_document" "deployer" {
     actions = [
       "iam:DeleteRolePermissionsBoundary",
     ]
+    resources = ["*"]
+  }
+
+  # It makes and changes roles but never becomes one, even a role whose trust
+  # policy names it: a trust policy that names a role in the same account
+  # needs no allow from that role's own policy.
+  statement {
+    sid       = "NeverAssumeRoles"
+    effect    = "Deny"
+    actions   = ["sts:AssumeRole*"]
     resources = ["*"]
   }
 

@@ -1,10 +1,14 @@
 // Command plandigest prints a saved OpenTofu plan's digest, read from
-// `tofu show -json` on stdin.
+// `tofu show -json` on stdin:
+//
+//	plandigest -commit <full commit hash> < plan.json
 //
 // The digest is the plan's identity for the Deploy workflow (ADR 0007): the
 // plan run posts it, and an apply run applies only a fresh plan with the
-// digest Craig copied from the plan he read. It covers what the apply would
-// do: each changed resource's actions, the object it acts on (its id and ARN
+// digest Craig copied from the plan he read. It covers the commit the plan
+// was made from, because an apply runs that commit's code, and some of what
+// the code does, such as a provisioner's commands, never shows in the plan.
+// It also covers what the apply would do: each changed resource's actions, the object it acts on (its id and ARN
 // before the change, so a delete or update can't land on a different object
 // than the one planned), its planned values, any import or move into its
 // address, and each changed output. A resource whose only change is an import
@@ -23,9 +27,11 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"flag"
 	"fmt"
 	"io"
 	"os"
+	"regexp"
 	"slices"
 	"strings"
 )
@@ -34,6 +40,9 @@ const digestLength = 16
 
 // The attributes that name the object a change acts on.
 var identity = []string{"id", "arn"}
+
+// A full commit hash, SHA-1 or SHA-256, as `git rev-parse HEAD` prints it.
+var commitHash = regexp.MustCompile(`^([0-9a-f]{40}|[0-9a-f]{64})$`)
 
 type savedPlan struct {
 	FormatVersion   string            `json:"format_version"`
@@ -84,11 +93,21 @@ type digestOutput struct {
 }
 
 func main() {
-	os.Exit(run(os.Stdin, os.Stdout, os.Stderr))
+	os.Exit(run(os.Args[1:], os.Stdin, os.Stdout, os.Stderr))
 }
 
-func run(stdin io.Reader, stdout, stderr io.Writer) int {
-	d, err := digest(stdin)
+func run(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
+	flags := flag.NewFlagSet("plandigest", flag.ContinueOnError)
+	flags.SetOutput(stderr)
+	commit := flags.String("commit", "", "the full hash of the commit the plan was made from")
+	if err := flags.Parse(args); err != nil {
+		return 2
+	}
+	if flags.NArg() != 0 || !commitHash.MatchString(*commit) {
+		fmt.Fprintln(stderr, "usage: plandigest -commit <full commit hash> < plan.json")
+		return 2
+	}
+	d, err := digest(*commit, stdin)
 	if err != nil {
 		fmt.Fprintln(stderr, "the saved plan could not be read:", err)
 		return 1
@@ -97,7 +116,7 @@ func run(stdin io.Reader, stdout, stderr io.Writer) int {
 	return 0
 }
 
-func digest(r io.Reader) (string, error) {
+func digest(commit string, r io.Reader) (string, error) {
 	dec := json.NewDecoder(r)
 	// Numbers stay as written, so a large one can't round to another.
 	dec.UseNumber()
@@ -156,9 +175,10 @@ func digest(r io.Reader) (string, error) {
 	// the same bytes.
 	var canonical bytes.Buffer
 	if err := json.NewEncoder(&canonical).Encode(struct {
+		Commit    string                  `json:"commit"`
 		Resources []digestResource        `json:"resources"`
 		Outputs   map[string]digestOutput `json:"outputs"`
-	}{resources, outputs}); err != nil {
+	}{commit, resources, outputs}); err != nil {
 		return "", err
 	}
 	sum := sha256.Sum256(canonical.Bytes())

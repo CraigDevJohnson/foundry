@@ -9,9 +9,10 @@
 # job summary, and the progress lines lose their "[id=...]" suffix. OpenTofu's
 # own errors still reach the log, because they're written to stderr.
 #
-# Every plan ends with its digest (cmd/plandigest). An apply run plans again
-# and applies only when that plan's digest is APPROVED_PLAN, the digest Craig
-# copied from the plan run he read, so what applies is exactly what he
+# Every plan ends with its digest (cmd/plandigest), which covers the plan and
+# the commit it was made from. An apply run plans again and applies only when
+# that plan's digest is APPROVED_PLAN, the digest Craig copied from the plan
+# run he read, so what applies is exactly what he approved, from the code he
 # approved. If main or the state changed since, it stops before applying and
 # posts the new plan and its digest instead (ADR 0007).
 #
@@ -49,6 +50,8 @@ if [[ ! -f "$root_dir/dist/bootstrap.zip" ]]; then
 	exit 1
 fi
 
+commit="$(git -C "$root_dir" rev-parse HEAD)"
+
 work="$(mktemp -d)"
 trap 'rm -rf "$work"' EXIT
 out="$work/output"
@@ -81,11 +84,11 @@ if [[ "$status" -ne 0 ]]; then
 	printf '::error::tofu plan failed (exit %s); see the messages above\n' "$status" >&2
 	exit "$status"
 fi
-if ! digest="$("$tofu" -chdir="$root_dir/infra" show -json "$work/tfplan" | (cd "$root_dir" && go run ./cmd/plandigest))"; then
+if ! digest="$("$tofu" -chdir="$root_dir/infra" show -json "$work/tfplan" | (cd "$root_dir" && go run ./cmd/plandigest -commit "$commit"))"; then
 	printf '::error::the saved plan could not be read for its digest\n' >&2
 	exit 1
 fi
-printf "\nPlan digest: \`%s\`\n" "$digest" | tee -a "${GITHUB_STEP_SUMMARY:-/dev/null}"
+printf "\nPlan digest: \`%s\` (commit \`%s\`)\n" "$digest" "${commit:0:12}" | tee -a "${GITHUB_STEP_SUMMARY:-/dev/null}"
 rebuild_note=""
 if [[ ${#plan_args[@]} -gt 0 ]]; then
 	rebuild_note=", with rebuild host checked"

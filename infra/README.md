@@ -61,11 +61,12 @@ Run **Actions › Deploy › Run workflow** on `main`:
 
 1. Choose mode `plan` and run it. Approve the run when GitHub asks (the
    `deploy` environment's review). Read the plan in the run's summary: the
-   resources it changes and the totals, then its digest.
+   resources it changes and the totals, then its digest, which also covers
+   the commit the plan was made from.
 2. Run Deploy again with mode `apply` and that digest as `plan`, and approve
-   it. It plans again and applies only if the plan is the one you read; if
-   `main` or the state changed since, it applies nothing and posts the new
-   plan and digest.
+   it. It plans again and applies only if the plan, and the commit it was
+   made from, are the ones you read; if `main` or the state changed since,
+   it applies nothing and posts the new plan and digest.
 
 **Rebuild host** replaces the host's instance (see [Rebuilding the host](#rebuilding-the-host)).
 Check it on both runs: the digest covers it.
@@ -78,7 +79,10 @@ Craig with `workloads-admin`, once before the first Deploy run and again for
 each change to it. So are changes to the host's role (`foundry-host`), the
 snapshot role (`foundry-dlm`) and the state bucket's settings, which the
 deploy role can't make: a Deploy apply that changes one stops with
-`AccessDenied` at that resource.
+`AccessDenied` at that resource. The role can still have the host do anything
+the host's role allows, by rebuilding it, setting its user data or changing
+the stop document it runs, so what limits it there is that only a run you
+approve, of a plan you read, holds it (ADR 0007).
 
 In EC2 the role may make only the calls the infra root's resources make
 today (`ec2_create_actions` and `ec2_change_actions` in

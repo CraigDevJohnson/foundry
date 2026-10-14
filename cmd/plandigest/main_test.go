@@ -37,9 +37,12 @@ const basePlan = `{
   }
 }`
 
+// The commit the plans in these tests were made from.
+const commit = "0123456789abcdef0123456789abcdef01234567"
+
 func digestOf(t *testing.T, plan string) string {
 	t.Helper()
-	d, err := digest(strings.NewReader(plan))
+	d, err := digest(commit, strings.NewReader(plan))
 	if err != nil {
 		t.Fatalf("digest: %v", err)
 	}
@@ -140,6 +143,18 @@ func TestDigestCoversDeposedObjects(t *testing.T) {
 	}
 }
 
+// The same plan made from another commit is another plan: the apply would run
+// that commit's code.
+func TestDigestCoversTheCommit(t *testing.T) {
+	other, err := digest("1123456789abcdef0123456789abcdef01234567", strings.NewReader(basePlan))
+	if err != nil {
+		t.Fatalf("digest: %v", err)
+	}
+	if other == digestOf(t, basePlan) {
+		t.Fatal("the same plan from two commits has one digest")
+	}
+}
+
 func TestDigestDoesNotDependOnResourceOrder(t *testing.T) {
 	a := `{"format_version":"1.2","resource_changes":[
 	  {"address":"a","change":{"actions":["create"],"before":null,"after":{"x":1},"after_unknown":{}}},
@@ -172,7 +187,7 @@ func TestRefusesWhatIsNotAPlan(t *testing.T) {
 	} {
 		t.Run(name, func(t *testing.T) {
 			var stdout, stderr bytes.Buffer
-			if code := run(strings.NewReader(input), &stdout, &stderr); code != 1 {
+			if code := run([]string{"-commit", commit}, strings.NewReader(input), &stdout, &stderr); code != 1 {
 				t.Fatalf("exit %d, want 1", code)
 			}
 			if stdout.Len() != 0 {
@@ -185,9 +200,32 @@ func TestRefusesWhatIsNotAPlan(t *testing.T) {
 	}
 }
 
+func TestRunNeedsTheFullCommit(t *testing.T) {
+	for name, args := range map[string][]string{
+		"no commit":         nil,
+		"an empty commit":   {"-commit", ""},
+		"a short commit":    {"-commit", commit[:12]},
+		"a capital commit":  {"-commit", strings.ToUpper(commit)},
+		"a branch name":     {"-commit", "main"},
+		"another argument":  {"-commit", commit, "plan.json"},
+		"an unknown flag":   {"-commit", commit, "-v"},
+		"a commit with a ;": {"-commit", commit + ";"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			var stdout, stderr bytes.Buffer
+			if code := run(args, strings.NewReader(basePlan), &stdout, &stderr); code != 2 {
+				t.Fatalf("exit %d, want 2", code)
+			}
+			if stdout.Len() != 0 {
+				t.Errorf("stdout %q, want nothing", stdout.String())
+			}
+		})
+	}
+}
+
 func TestRunPrintsOnlyTheDigest(t *testing.T) {
 	var stdout, stderr bytes.Buffer
-	if code := run(strings.NewReader(basePlan), &stdout, &stderr); code != 0 {
+	if code := run([]string{"-commit", commit}, strings.NewReader(basePlan), &stdout, &stderr); code != 0 {
 		t.Fatalf("exit %d, stderr %q", code, stderr.String())
 	}
 	if want := digestOf(t, basePlan) + "\n"; stdout.String() != want {

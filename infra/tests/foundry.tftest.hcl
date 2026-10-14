@@ -700,6 +700,25 @@ run "stop_document_shuts_foundry_down_then_powers_off" {
     error_message = "foundry-stop must write the shutdown script whole to its own file, stop if that write fails, run it, and power off only if it exits 0."
   }
 
+  # The dev and prod controllers can both send a stop at once.
+  assert {
+    condition = (
+      strcontains(
+        jsondecode(aws_ssm_document.stop.content).mainSteps[0].inputs.runCommand[0],
+        "if ! flock -n 9; then\n  echo \"Another stop is shutting Foundry down; waiting for it\"\n"
+      ) &&
+      strcontains(
+        jsondecode(aws_ssm_document.stop.content).mainSteps[0].inputs.runCommand[0],
+        "  if [[ -e \"$succeeded\" ]]; then\n    echo \"The other stop shut Foundry down; the host powers off in a minute\"\n    exit 0\n  fi\n  echo \"The other stop failed; leaving the host running\" >&2\n  exit 1\nfi\n"
+      ) &&
+      endswith(
+        jsondecode(aws_ssm_document.stop.content).mainSteps[0].inputs.runCommand[0],
+        "${file("templates/foundry-power-off.sh")}\n: >\"$succeeded\"\n"
+      )
+    )
+    error_message = "Only one foundry-stop runs the shutdown at a time; another waits and ends as it did, succeeding only once the first scheduled the power-off."
+  }
+
   assert {
     condition = (
       strcontains(file("templates/foundry-power-off.sh"), "shutdown --poweroff +1") &&

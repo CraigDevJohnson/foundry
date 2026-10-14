@@ -24,6 +24,9 @@ for processes writing Foundry data. The host's instance-initiated shutdown
 behavior is `stop`, now stated in `host.tf`, so EC2 stops the instance and
 keeps its volumes and Elastic IP. If any part of the shutdown fails, the
 power-off never runs and the host keeps running, as with `task host:stop`.
+Each site environment has its own controller, so two stops can arrive at
+once; a lock in `/run` lets only one run the shutdown, and the other waits
+for it and ends as it did.
 
 The controller never waits for either. It answers `202` at once, and the
 status follows the change from there: a stop sent since EC2 last started the

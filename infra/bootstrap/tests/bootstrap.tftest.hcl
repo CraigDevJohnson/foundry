@@ -42,7 +42,7 @@ run "deployer_trusts_only_the_deploy_environment" {
 }
 
 # A role is made or given a policy only inside the boundary, the boundary
-# stays on, and the deploy role can't reach itself.
+# stays on, the deploy role can't reach itself and never becomes another role.
 run "roles_change_only_inside_the_boundary" {
   command = plan
 
@@ -68,6 +68,16 @@ run "roles_change_only_inside_the_boundary" {
       s.effect == "Deny" && contains(tolist(s.actions), "iam:DeleteRolePermissionsBoundary") && s.resources == toset(["*"])
     ])
     error_message = "The deploy role must never remove a role's boundary."
+  }
+
+  # A role it changes could name it in its trust policy; the deny keeps it
+  # from becoming that role.
+  assert {
+    condition = anytrue([
+      for s in data.aws_iam_policy_document.deployer.statement :
+      s.effect == "Deny" && contains(tolist(s.actions), "sts:AssumeRole*") && s.resources == toset(["*"])
+    ])
+    error_message = "The deploy role must never assume a role."
   }
 
   # Every IAM change is on the bounded roles, whose patterns don't match
@@ -231,8 +241,7 @@ run "ec2_changes_stay_on_foundry_resources" {
       "ec2:CreateSecurityGroup", "ec2:CreateVolume", "ec2:RunInstances",
       "ec2:AssociateAddress", "ec2:AttachVolume", "ec2:DeleteSecurityGroup", "ec2:DeleteVolume",
       "ec2:DetachVolume", "ec2:DisassociateAddress", "ec2:ModifyInstanceAttribute",
-      "ec2:ModifyInstanceMetadataOptions", "ec2:ModifyNetworkInterfaceAttribute",
-      "ec2:ModifySecurityGroupRules", "ec2:ModifyVolume", "ec2:ReleaseAddress",
+      "ec2:ModifyInstanceMetadataOptions", "ec2:ModifySecurityGroupRules", "ec2:ModifyVolume", "ec2:ReleaseAddress",
       "ec2:RevokeSecurityGroupEgress", "ec2:RevokeSecurityGroupIngress", "ec2:StartInstances",
       "ec2:StopInstances", "ec2:TerminateInstances", "ec2:CreateTags", "ec2:DeleteTags",
     ])
@@ -272,7 +281,7 @@ run "ec2_changes_stay_on_foundry_resources" {
     condition = anytrue([
       for s in data.aws_iam_policy_document.deployer.statement :
       s.sid == "OnlyFoundryEc2Resources" && s.effect == "Deny" &&
-      length(setintersection(s.actions, toset(["ec2:TerminateInstances", "ec2:DeleteVolume", "ec2:DetachVolume", "ec2:ReleaseAddress", "ec2:DeleteSecurityGroup", "ec2:ModifyNetworkInterfaceAttribute", "ec2:AuthorizeSecurityGroupIngress"]))) == 7 &&
+      length(setintersection(s.actions, toset(["ec2:TerminateInstances", "ec2:DeleteVolume", "ec2:DetachVolume", "ec2:ReleaseAddress", "ec2:DeleteSecurityGroup", "ec2:AssociateAddress", "ec2:AuthorizeSecurityGroupIngress"]))) == 7 &&
       anytrue([for c in s.condition : c.test == "StringNotEquals" && c.variable == "aws:ResourceTag/project" && toset(c.values) == toset(["foundry"])])
     ])
     error_message = "Destroying or changing an EC2 resource must need project=foundry."
