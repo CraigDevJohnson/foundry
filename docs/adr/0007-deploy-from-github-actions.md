@@ -73,7 +73,8 @@ What it may do is set by rules that hold whatever a commit to `main` says:
   holds the role.
 - **EC2.** Only the calls OpenTofu makes for the host, its data volume,
   Elastic IP and security group, in us-west-2, recorded from the provider's
-  own requests. Each instance, volume, security group, rule or Elastic IP it
+  own requests, reads included. It reads an instance's user data, which can
+  hold another workload's secrets, only from Foundry's instances. Each instance, volume, security group, rule or Elastic IP it
   creates must carry `project=foundry` in the request, a new host or rule may
   use only Foundry's security group, and it changes, tags or deletes only a
   resource already tagged `project=foundry`. It sets that tag only on a

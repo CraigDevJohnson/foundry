@@ -91,10 +91,13 @@ the stop document it runs, so what limits it there is that only a run you
 approve, of a plan you read, holds it (ADR 0007).
 
 In EC2 the role may make only the calls the infra root's resources make
-today (`ec2_create_actions` and `ec2_change_actions` in
-`bootstrap/deployer.tf`). A change that adds a new kind of EC2 resource, or
-an argument that needs another call, adds that call there and is applied to
-the bootstrap first.
+today, reads included (`ec2_read_actions`, `ec2_create_actions` and
+`ec2_change_actions` in `bootstrap/deployer.tf`), and reads user data only
+from Foundry's own instances. A change that adds a new kind of EC2 resource,
+or an argument that needs another call, adds that call there and is applied
+to the bootstrap first. The role's one inline policy is close to IAM's limit
+of 10,240 characters (about 10,160 now), so a change that adds much more
+moves some statements into a managed policy.
 
 One time, in GitHub, at Settings › Environments, after the repository is
 public:

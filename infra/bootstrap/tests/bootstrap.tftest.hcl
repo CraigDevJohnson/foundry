@@ -242,7 +242,12 @@ run "ec2_changes_stay_on_foundry_resources" {
       for s in data.aws_iam_policy_document.deployer.statement :
       [for a in s.actions : a if startswith(a, "ec2:")] if s.effect != "Deny"
       ])) == toset([
-      "ec2:Describe*", "ec2:GetInstanceUefiData",
+      "ec2:DescribeAddresses", "ec2:DescribeAddressesAttribute", "ec2:DescribeImages",
+      "ec2:DescribeInstanceAttribute", "ec2:DescribeInstanceCreditSpecifications", "ec2:DescribeInstanceTypes",
+      "ec2:DescribeInstances", "ec2:DescribeNetworkInterfaces", "ec2:DescribeRouteTables",
+      "ec2:DescribeSecurityGroupRules", "ec2:DescribeSecurityGroups", "ec2:DescribeSubnets", "ec2:DescribeTags",
+      "ec2:DescribeVolumes", "ec2:DescribeVolumesModifications", "ec2:DescribeVpcAttribute", "ec2:DescribeVpcs",
+      "ec2:GetInstanceUefiData",
       "ec2:AllocateAddress", "ec2:AuthorizeSecurityGroupEgress", "ec2:AuthorizeSecurityGroupIngress",
       "ec2:CreateSecurityGroup", "ec2:CreateVolume", "ec2:RunInstances",
       "ec2:AssociateAddress", "ec2:AttachVolume", "ec2:DeleteSecurityGroup", "ec2:DeleteVolume",
@@ -252,6 +257,20 @@ run "ec2_changes_stay_on_foundry_resources" {
       "ec2:StopInstances", "ec2:TerminateInstances", "ec2:CreateTags", "ec2:DeleteTags",
     ])
     error_message = "The deploy role may make only the EC2 calls the infra root needs."
+  }
+
+  # An instance's user data can hold another workload's secrets: the reads
+  # that return it, or its UEFI variables, are granted only on instances
+  # tagged project=foundry.
+  assert {
+    condition = alltrue([
+      for s in data.aws_iam_policy_document.deployer.statement :
+      s.effect == "Deny" || length(setintersection(s.actions, toset(["ec2:DescribeInstanceAttribute", "ec2:GetInstanceUefiData"]))) == 0 || (
+        s.resources == toset(["arn:aws:ec2:us-west-2:793680745829:instance/*"]) &&
+        anytrue([for c in s.condition : c.test == "StringEquals" && c.variable == "aws:ResourceTag/project" && toset(c.values) == toset(["foundry"])])
+      )
+    ])
+    error_message = "User data and UEFI variables may be read only from Foundry's instances."
   }
 
   # A new instance, volume, Elastic IP or rule is allowed only with

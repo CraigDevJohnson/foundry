@@ -58,6 +58,31 @@ locals {
   # rule may notify.
   alerts_topic_arn = "arn:aws:sns:${local.region}:${local.account}:alerts"
 
+  # The EC2 reads the provider makes for the infra root's resources in a
+  # create, a refresh, an update, a host rebuild and a delete (recorded
+  # against a local EC2 mock), and the wait after a volume change. None of
+  # them returns another workload's user data or secrets: the instance reads
+  # that can, user data and UEFI variables, are granted only on Foundry's
+  # instances (Ec2ReadFoundryInstances).
+  ec2_read_actions = [
+    "ec2:DescribeAddresses",
+    "ec2:DescribeAddressesAttribute",
+    "ec2:DescribeImages",
+    "ec2:DescribeInstanceCreditSpecifications",
+    "ec2:DescribeInstanceTypes",
+    "ec2:DescribeInstances",
+    "ec2:DescribeNetworkInterfaces",
+    "ec2:DescribeRouteTables",
+    "ec2:DescribeSecurityGroupRules",
+    "ec2:DescribeSecurityGroups",
+    "ec2:DescribeSubnets",
+    "ec2:DescribeTags",
+    "ec2:DescribeVolumes",
+    "ec2:DescribeVolumesModifications",
+    "ec2:DescribeVpcAttribute",
+    "ec2:DescribeVpcs",
+  ]
+
   # The EC2 calls the infra root's resources make in a create, an update, a
   # host rebuild or a delete, besides reading and tagging.
   ec2_create_actions = [
@@ -269,13 +294,27 @@ data "aws_iam_policy_document" "deployer" {
   # network or account setting.
   statement {
     sid       = "Ec2Read"
-    actions   = ["ec2:Describe*", "ec2:GetInstanceUefiData"]
+    actions   = local.ec2_read_actions
     resources = ["*"]
 
     condition {
       test     = "StringEquals"
       variable = "aws:RequestedRegion"
       values   = [local.region]
+    }
+  }
+
+  # An instance's user data can hold another workload's secrets, so it is
+  # read only from Foundry's instances, as are its UEFI variables.
+  statement {
+    sid       = "Ec2ReadFoundryInstances"
+    actions   = ["ec2:DescribeInstanceAttribute", "ec2:GetInstanceUefiData"]
+    resources = ["arn:aws:ec2:${local.region}:${local.account}:instance/*"]
+
+    condition {
+      test     = "StringEquals"
+      variable = "aws:ResourceTag/project"
+      values   = ["foundry"]
     }
   }
 
