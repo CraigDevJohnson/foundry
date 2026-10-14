@@ -230,9 +230,13 @@ covers stopping Foundry first and deleting the snapshot afterwards.
 ## Rebuilding the host
 
 Stop the host first with Host control's stop, which shuts Foundry down
-cleanly. EC2's own stop, which runs before the data volume detaches, doesn't
-run Foundry's shutdown, so an apply that replaces or removes a host that
-isn't `stopped` applies nothing (`scripts/deploy.sh`); a plan says so.
+cleanly. The stop OpenTofu makes doesn't run Foundry's shutdown, so an apply
+that would stop a host that isn't `stopped` applies nothing
+(`scripts/deploy.sh`), and a plan says so. That is an apply that replaces or
+removes the host, detaches its data volume, which stops the host first, or
+changes a setting the AWS provider changes only on a stopped instance, which
+it stops and starts again around the change: the host's type, user data, CPU
+options or capacity reservation. A bigger instance type is such a change too.
 
 A Deploy plan with **Rebuild host** checked (`-replace=aws_instance.host`)
 keeps the data volume and the Elastic IP (both have `prevent_destroy`), and

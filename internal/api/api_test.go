@@ -50,8 +50,8 @@ func refuse(t *testing.T) Observer {
 	})
 }
 
-// report is one observation. A running host with a start time has had its
-// stops read and none found; any other host has not had them read.
+// report is one observation. A running host has had its stops read and none
+// found; any other host has not had them read.
 func report(host, agent, foundry string, launched time.Time) status.Report {
 	r := status.Report{ObservedAt: now}
 	r.Host.State, r.Host.Reason, r.Host.LaunchTime = host, "observed", launched
@@ -62,7 +62,7 @@ func report(host, agent, foundry string, launched time.Time) status.Report {
 }
 
 func stopFor(host string, launched time.Time) string {
-	if host == "running" && !launched.IsZero() {
+	if host == "running" {
 		return "none"
 	}
 	return "not_checked"
@@ -169,15 +169,24 @@ func TestStateRules(t *testing.T) {
 	}
 }
 
-// A running host whose stop could not be read is unknown, whatever its join
+// A running host whose stop could not be read, or was recorded but not checked
+// because EC2 gave no start time to place it, is unknown, whatever its join
 // page answers: a stop may be under way.
 func TestAnUnreadableStopIsUnknown(t *testing.T) {
-	r := report("running", "online", "responding", now.Add(-time.Hour))
-	r.Stop.State, r.Stop.Reason = "unknown", "timeout"
-	h, _ := newServer(fixed(r))
-	a := decode(t, do(h, http.MethodGet, "/server"))
-	if a.State != Unknown || a.Checks["stop"] != "unknown" {
-		t.Fatalf("%+v", a)
+	for _, test := range []struct {
+		stop, reason string
+		launched     time.Time
+	}{
+		{"unknown", "timeout", now.Add(-time.Hour)},
+		{"not_checked", "no_launch_time", time.Time{}},
+	} {
+		r := report("running", "online", "responding", test.launched)
+		r.Stop.State, r.Stop.Reason = test.stop, test.reason
+		h, _ := newServer(fixed(r))
+		a := decode(t, do(h, http.MethodGet, "/server"))
+		if a.State != Unknown || a.Checks["stop"] != test.stop {
+			t.Errorf("%s: %+v", test.stop, a)
+		}
 	}
 }
 

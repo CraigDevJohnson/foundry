@@ -297,6 +297,7 @@ func TestStopStopsARunningHost(t *testing.T) {
 		{"unresponsive", report("running", "offline", "unreachable", hourAgo)},
 		{"after a failed stop", withStop(readyHost, "failed", recently)},
 		{"a stop that never powered off", withStop(report("running", "online", "unreachable", hourAgo), "succeeded", longAgo)},
+		{"no start time and no stop recorded", report("running", "online", "responding", time.Time{})},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			change := &changer{}
@@ -332,7 +333,7 @@ func TestStopLeavesOtherHostsAlone(t *testing.T) {
 		{"stop about to power off", withStop(report("running", "online", "unreachable", hourAgo), "succeeded", recently), http.StatusOK, Stopping},
 		{"pending", report("pending", "not_checked", "not_checked", recently), http.StatusConflict, "starting"},
 		{"stops unreadable", withStop(readyHost, "unknown", time.Time{}), http.StatusServiceUnavailable, "status_unknown"},
-		{"no start time", report("running", "online", "responding", time.Time{}), http.StatusServiceUnavailable, "status_unknown"},
+		{"stop recorded without a start time", withStop(report("running", "online", "responding", time.Time{}), "not_checked", time.Time{}), http.StatusServiceUnavailable, "status_unknown"},
 		{"EC2 unreadable", report("unknown", "not_checked", "not_checked", time.Time{}), http.StatusServiceUnavailable, "status_unknown"},
 		{"terminated", report("terminated", "not_checked", "not_checked", hourAgo), http.StatusNotFound, "no_server"},
 	} {

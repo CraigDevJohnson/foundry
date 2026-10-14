@@ -244,15 +244,16 @@ func (s *Service) agent(ctx context.Context) SSMObservation {
 
 // stop follows the latest stop sent to the host, which the controller recorded
 // on the host's tags, if it was sent since EC2 last started the host: a stop
-// from an earlier run never counts. Without a start time there is no such
-// bound, and nothing is guessed. A stop whose record has expired is reported
-// as none: it is long over, whatever it did.
+// from an earlier run never counts. Without a start time a recorded stop
+// can't be placed before or after it, so it isn't checked and nothing is
+// guessed. A stop whose record has expired is reported as none: it is long
+// over, whatever it did.
 func (s *Service) stop(ctx context.Context, host HostObservation) StopObservation {
-	if host.LaunchTime.IsZero() {
-		return StopObservation{Observation: Observation{State: "not_checked", Reason: "no_launch_time"}}
-	}
 	if host.StopCommand == "" && host.StopRequested == "" {
 		return StopObservation{Observation: Observation{State: "none", Reason: "observed"}}
+	}
+	if host.LaunchTime.IsZero() {
+		return StopObservation{Observation: Observation{State: "not_checked", Reason: "no_launch_time"}}
 	}
 	requested, err := time.Parse(time.RFC3339, host.StopRequested)
 	if err != nil || !commandID.MatchString(host.StopCommand) {

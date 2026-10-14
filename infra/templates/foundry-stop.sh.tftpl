@@ -68,5 +68,15 @@ if ! bash "$shutdown"; then
   exit 1
 fi
 
-${power_off}
-: >"$succeeded"
+# The success marker goes down before the power-off is scheduled, so a stop
+# that schedules it always leaves the marker for one that waited or arrives
+# next, and comes off again if the power-off can't be scheduled.
+if ! : >"$succeeded"; then
+  echo "Could not record that Foundry shut down; leaving the host running" >&2
+  exit 1
+fi
+if ! (
+${power_off}); then
+  rm -f "$succeeded"
+  exit 1
+fi

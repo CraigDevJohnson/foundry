@@ -21,10 +21,12 @@
 #
 # REBUILD_HOST=true plans the host's replacement (-replace=aws_instance.host),
 # which keeps the data volume and the Elastic IP. The digest covers it, so the
-# apply run must ask for it too. A plan that replaces or destroys the host
-# applies only while the host is stopped, so Foundry has shut down cleanly
-# first: EC2's stop before the volume detaches doesn't run Foundry's own
-# shutdown.
+# apply run must ask for it too. A plan that stops the host applies only while
+# the host is stopped, so Foundry has shut down cleanly first: the stop
+# OpenTofu makes doesn't run Foundry's own shutdown. That is a plan that
+# replaces or destroys the host, detaches its data volume, or changes a
+# setting the AWS provider changes only on a stopped instance, such as its
+# type.
 set -euo pipefail
 
 root_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)"
@@ -101,9 +103,26 @@ if ! "$tofu" -chdir="$root_dir/infra" show -json "$work/tfplan" >"$work/plan.jso
 	printf '::error::the saved plan could not be read for its digest\n' >&2
 	exit 1
 fi
-# What EC2 reported for the host at the plan's refresh, when the plan replaces
-# or destroys it; empty when it doesn't.
-if ! host_state="$(jq -r 'first(.resource_changes[]? | select(.address == "aws_instance.host" and (.change.actions | index("delete"))) | (.change.before.instance_state // "unknown")) // empty' "$work/plan.json")"; then
+# What EC2 reported for the host at the plan's refresh, when applying the plan
+# stops the host; empty when it doesn't. The plan stops the host when it
+# replaces or destroys it; when it removes the data volume's attachment, which
+# stops the host before detaching (stop_instance_before_detaching); and when it
+# changes one of the host's settings that the AWS provider (6.66.0) changes
+# only on a stopped instance, stopping it and starting it again around the
+# change: its type, user data, CPU options or capacity reservation.
+host_state_filter='
+def changed($names): .change as $change | any($names[]; $change.before[.] != $change.after[.]);
+def stops_host:
+	any(.resource_changes[]?;
+		(.address == "aws_instance.host" and
+			((.change.actions | index("delete")) or
+				(.change.actions == ["update"] and
+					changed(["instance_type", "user_data", "user_data_base64", "cpu_options", "capacity_reservation_specification"]))))
+		or (.type == "aws_volume_attachment" and (.change.actions | index("delete"))));
+if stops_host then
+	first(.prior_state.values.root_module.resources[]? | select(.address == "aws_instance.host") | .values.instance_state) // "unknown"
+else empty end'
+if ! host_state="$(jq -r "$host_state_filter" "$work/plan.json")"; then
 	printf '::error::the saved plan could not be read for the host'"'"'s state\n' >&2
 	exit 1
 fi
@@ -114,7 +133,7 @@ if [[ ${#plan_args[@]} -gt 0 ]]; then
 fi
 host_note=""
 if [[ -n "$host_state" && "$host_state" != stopped ]]; then
-	host_note="$(printf "This plan replaces or removes the host, which is \`%s\`. Stop it first with Host control's stop, which shuts Foundry down cleanly, and run the apply once the host is \`stopped\`: an apply refuses to replace a host that isn't stopped." "$host_state")"
+	host_note="$(printf "This plan stops the host, which is \`%s\`: it replaces or removes it, detaches its data volume, or changes a setting EC2 changes only on a stopped host. Stop it first with Host control's stop, which shuts Foundry down cleanly, and run the apply once the host is \`stopped\`: until then an apply applies nothing." "$host_state")"
 fi
 if [[ "$mode" == plan ]]; then
 	if [[ -n "$host_note" ]]; then
@@ -126,7 +145,7 @@ if [[ "$mode" == plan ]]; then
 fi
 if [[ -n "$host_note" ]]; then
 	printf '\nNothing was applied. %s\n' "$host_note" | tee -a "${GITHUB_STEP_SUMMARY:-/dev/null}"
-	printf '::error::the plan replaces or removes a host that is not stopped; nothing was applied\n' >&2
+	printf '::error::the plan stops a host that is not stopped; nothing was applied\n' >&2
 	exit 1
 fi
 if [[ "$digest" != "$approved" ]]; then

@@ -29,9 +29,11 @@ it and each changed output, and leaves out
 what only describes the present, so starting or stopping Foundry between the
 two runs doesn't change it unless the plan changes the host. A host rebuild
 (`-replace=aws_instance.host`) is a Deploy option the digest covers too. An
-apply that replaces or removes the host runs only while EC2 reports it
-stopped, so Foundry's own clean shutdown (Host control's stop) has run
-first; EC2's stop before the data volume detaches doesn't run it.
+apply that would stop the host runs only while EC2 reports it stopped, so
+Foundry's own clean shutdown (Host control's stop) has run first; the stop
+OpenTofu makes doesn't run it. That covers replacing or removing the host,
+detaching its data volume, and changing a setting the AWS provider changes
+only on a stopped instance, such as its type.
 
 The repository is public, so its run logs are too. Only the resource
 headers, the progress lines without their `[id=...]` suffix and the totals

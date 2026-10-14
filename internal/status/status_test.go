@@ -181,6 +181,24 @@ func TestMissingLaunchTimeStaysMissing(t *testing.T) {
 	}
 }
 
+// Without a start time, a host with no stop recorded on it has none to follow.
+func TestMissingLaunchTimeWithoutAStop(t *testing.T) {
+	s := testService(t)
+	output := hostOutput("running")
+	output.Reservations[0].Instances[0].LaunchTime = nil
+	s.EC2 = ec2Func(func(context.Context, *ec2.DescribeInstancesInput) (*ec2.DescribeInstancesOutput, error) {
+		return output, nil
+	})
+	s.Commands = invocationFunc(func(context.Context, *ssm.GetCommandInvocationInput) (*ssm.GetCommandInvocationOutput, error) {
+		t.Error("stops read with none recorded")
+		return nil, nil
+	})
+	report := s.Observe(context.Background())
+	if report.Stop.State != "none" || report.Stop.Reason != "observed" {
+		t.Fatalf("stop=%+v", report.Stop)
+	}
+}
+
 func TestObservedAtIsWhenTheObservationFinished(t *testing.T) {
 	s := testService(t)
 	finished := false

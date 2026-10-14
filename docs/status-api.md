@@ -61,7 +61,7 @@ URL, AWS role or command: those come only from the function's configuration.
   | `ready` | EC2 reports `running`, no stop is under way, and the join page answered 200. Nothing else is ever `ready`. |
   | `stopping` | EC2 reports `stopping` or `shutting-down`. Or EC2 reports `running` and a stop is under way: `checks.stop` is `in_progress`, or `succeeded` less than 15 minutes after the stop was sent, while the host powers off. |
   | `unresponsive` | EC2 reports `running`, the join page does not answer 200, and EC2 started the host 10 minutes ago or more, or gave no start time. The host is on but Foundry is not answering players: no world is open, Foundry shows its license page after a rebuild, it crashed, or a stop shut it down but the host never powered off. |
-  | `unknown` | EC2's state could not be read: a timeout, access denied, a provider error or a record that does not match. Or EC2 reports `running` and the stop recorded on the host could not be read (`checks.stop` is `unknown`), so a stop may be under way. It is never guessed. |
+  | `unknown` | EC2's state could not be read: a timeout, access denied, a provider error or a record that does not match. Or EC2 reports `running` and the stop recorded on the host could not be read (`checks.stop` is `unknown`), or was not checked because EC2 gave no start time (`not_checked`), so a stop may be under way. It is never guessed. |
 
   The 10 minutes count from EC2's `LaunchTime`, which EC2 resets on every
   start. The agent's state never changes `state`. A stop under way comes
@@ -82,8 +82,8 @@ URL, AWS role or command: those come only from the function's configuration.
   | `stop` | `none`, `in_progress`, `succeeded`, `failed`, `unknown`, `not_checked` | The stop recorded on the host, if it was sent since EC2 last started the host: none, still running (or being cancelled), done (Foundry is down and the host powers off a minute later), or failed, timed out or cancelled (the host stays on). A stop whose record Systems Manager no longer keeps is `none`: it can't still be running |
 
   `agent`, `foundry` and `stop` are `not_checked` unless EC2 reports the host
-  `running`; `stop` is also `not_checked` when EC2 gave no start time to count
-  from.
+  `running`; `stop` is also `not_checked` when a stop is recorded on the host
+  but EC2 gave no start time to tell whether it was sent since.
 
 Times are UTC in RFC 3339 with whole seconds. Reasons, raw provider errors,
 page content, instance IDs and IP addresses are never in an answer.
@@ -115,7 +115,7 @@ that record says, even when Systems Manager no longer keeps it.
 - `404` with `{"code": "no_server"}` as for `GET /server`.
 - `503` with `{"code": "status_unknown"}` when EC2's state could not be read,
   or EC2 reports the host `running` and the stop recorded on it could not be
-  read. `503` with `{"code": "start_failed"}` when EC2 refused the start for
+  read or checked. `503` with `{"code": "start_failed"}` when EC2 refused the start for
   another reason or its answer didn't arrive in time. The start may have
   happened then, and the status shows it if so. Nothing is retried.
 
@@ -156,7 +156,7 @@ are ignored. Anything else answers `400` with
   after it booted. Nothing was sent.
 - `404` with `{"code": "no_server"}` as for `GET /server`.
 - `503` with `{"code": "status_unknown"}` when EC2's state, or the stop
-  recorded on the host, could not be read: a second stop could overlap the
+  recorded on the host, could not be read or checked: a second stop could overlap the
   first, so none is sent. `{"code": "stop_failed"}` when Systems Manager
   refused the command for another reason or its answer didn't arrive in time.
   The command may have been sent then, but without its ID the controller

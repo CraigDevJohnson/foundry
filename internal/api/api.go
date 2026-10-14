@@ -195,8 +195,8 @@ func (h *Handler) answer(report status.Report, state string) serverStatus {
 }
 
 // State derives the reported state from one observation. A running host is
-// unknown when the stop recorded on it could not be read, because one may be
-// under way; it is stopping while a stop is under way, and otherwise ready
+// unknown when the stop recorded on it could not be read or checked, because
+// one may be under way; it is stopping while a stop is under way, and otherwise ready
 // only when its join page answered 200. A running host whose page does not answer is starting
 // for bootGrace after EC2 started it, and unresponsive after that or when EC2
 // gave no start time. A host EC2 could not describe is unknown, never
@@ -211,7 +211,7 @@ func State(report status.Report) string {
 	case "stopping", "shutting-down":
 		return Stopping
 	case "running":
-		if report.Stop.State == "unknown" {
+		if !stopsKnown(report) {
 			return Unknown
 		}
 		if stopUnderWay(report) {
@@ -338,7 +338,7 @@ func (h *Handler) stop(w http.ResponseWriter, r *http.Request) {
 		h.logChange(ctx, slog.LevelInfo, "stop", "no_server", who, report)
 		writeJSON(w, http.StatusNotFound, map[string]string{"code": "no_server"})
 		return
-	case state == Unknown || (report.Host.State == "running" && !stopsKnown(report)):
+	case state == Unknown:
 		// Without the stop recorded on a running host, a second one could
 		// overlap the first; nothing is sent.
 		h.logChange(ctx, slog.LevelWarn, "stop", "status_unknown", who, report)

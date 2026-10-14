@@ -38,12 +38,25 @@ printf '%s\n' "$STUB_DIGEST"
 '''
 
 
-def plan_json(actions, state):
-    """A saved plan's JSON with one change to the host."""
+def plan_json(actions, state, before=None, after=None, attachment=('no-op',)):
+    """A saved plan's JSON with one change to the host and its data volume's
+    attachment, and the host as the plan's refresh found it."""
+    before = {'instance_state': state, 'instance_type': 't4g.small', **(before or {})}
+    after = {**before, **(after or {})}
     return {
+        'prior_state': {'values': {'root_module': {'resources': [{
+            'address': 'aws_instance.host',
+            'type': 'aws_instance',
+            'values': {'instance_state': state},
+        }]}}},
         'resource_changes': [{
             'address': 'aws_instance.host',
-            'change': {'actions': actions, 'before': {'instance_state': state}},
+            'type': 'aws_instance',
+            'change': {'actions': actions, 'before': before, 'after': after},
+        }, {
+            'address': 'aws_volume_attachment.data',
+            'type': 'aws_volume_attachment',
+            'change': {'actions': list(attachment)},
         }],
     }
 
@@ -116,9 +129,43 @@ class DeployScriptTests(unittest.TestCase):
         self.assertNotIn('Stop it first', self.summary.read_text())
 
     def test_an_apply_changes_a_running_host_in_place(self):
-        result = self.deploy('apply', plan_json(['update'], 'running'))
+        result = self.deploy('apply', plan_json(['update'], 'running', after={'tags': {'Name': 'foundry'}}))
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         self.assertTrue(self.applied())
+
+    def test_an_apply_refuses_to_stop_a_running_host_for_a_change(self):
+        # The AWS provider stops the host and starts it again to change these.
+        for setting, value in (('instance_type', 't4g.medium'), ('user_data', 'changed'),
+                               ('user_data_base64', 'Y2hhbmdlZA=='),
+                               ('cpu_options', [{'core_count': 2}]),
+                               ('capacity_reservation_specification',
+                                [{'capacity_reservation_preference': 'none'}])):
+            with self.subTest(setting=setting):
+                result = self.deploy('apply', plan_json(['update'], 'running', after={setting: value}))
+                self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+                self.assertFalse(self.applied())
+                self.assertIn('which is `running`', self.summary.read_text())
+
+    def test_an_apply_refuses_to_detach_the_data_volume_from_a_running_host(self):
+        for actions in (['delete'], ['delete', 'create'], ['create', 'delete']):
+            with self.subTest(actions=actions):
+                result = self.deploy('apply', plan_json(['no-op'], 'running', attachment=actions))
+                self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+                self.assertFalse(self.applied())
+                self.assertIn('nothing was applied', result.stderr)
+
+    def test_an_apply_resizes_a_stopped_host(self):
+        result = self.deploy('apply', plan_json(['update'], 'stopped', after={'instance_type': 't4g.medium'}))
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertTrue(self.applied())
+
+    def test_an_apply_refuses_when_the_refresh_lost_the_host(self):
+        plan = plan_json(['update'], 'running', after={'instance_type': 't4g.medium'})
+        plan['prior_state']['values']['root_module']['resources'] = []
+        result = self.deploy('apply', plan)
+        self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+        self.assertFalse(self.applied())
+        self.assertIn('which is `unknown`', self.summary.read_text())
 
     def test_an_apply_without_the_host_runs(self):
         result = self.deploy('apply', {'resource_changes': []})
