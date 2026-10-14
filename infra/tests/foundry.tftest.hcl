@@ -441,12 +441,32 @@ run "controller_role_is_least_privilege" {
         "logs:PutLogEvents",
         "ec2:DescribeInstances",
         "ssm:DescribeInstanceInformation",
-        "ssm:ListCommands",
+        "ssm:GetCommandInvocation",
         "ec2:StartInstances",
         "ssm:SendCommand",
-      ]) && length(d.statement) == 4
+        "ec2:CreateTags",
+      ]) && length(d.statement) == 5
     ])
-    error_message = "The controller role grants exactly its log writes, the three reads, ec2:StartInstances and ssm:SendCommand: no EC2 stop and no parameter reads."
+    error_message = "The controller role grants exactly its log writes, the three reads, ec2:StartInstances, ssm:SendCommand and ec2:CreateTags: no EC2 stop, no parameter reads and no command listing."
+  }
+
+  assert {
+    condition = alltrue([
+      for d in data.aws_iam_policy_document.controller : (
+        one([for s in d.statement : s if s.sid == "RecordStopOnHost"]).actions == toset(["ec2:CreateTags"]) &&
+        one([for s in d.statement : s if s.sid == "RecordStopOnHost"]).resources == toset(["arn:aws:ec2:us-west-2:793680745829:instance/i-0123456789abcdef0"]) &&
+        length(one([for s in d.statement : s if s.sid == "RecordStopOnHost"]).condition) == 2 &&
+        anytrue([
+          for c in one([for s in d.statement : s if s.sid == "RecordStopOnHost"]).condition :
+          c.test == "ForAllValues:StringEquals" && c.variable == "aws:TagKeys" && toset(c.values) == toset(["foundry:stop-command", "foundry:stop-requested"])
+        ]) &&
+        anytrue([
+          for c in one([for s in d.statement : s if s.sid == "RecordStopOnHost"]).condition :
+          c.test == "Null" && c.variable == "aws:TagKeys" && toset(c.values) == toset(["false"])
+        ])
+      )
+    ])
+    error_message = "The controller may tag only the Foundry host, and only with the two stop tags."
   }
 
   assert {
@@ -487,7 +507,7 @@ run "controller_role_is_least_privilege" {
     condition = alltrue(flatten([
       for d in data.aws_iam_policy_document.controller : [
         for s in d.statement :
-        s.actions == toset(["ec2:DescribeInstances", "ssm:DescribeInstanceInformation", "ssm:ListCommands"]) if contains(tolist(s.resources), "*")
+        s.actions == toset(["ec2:DescribeInstances", "ssm:DescribeInstanceInformation", "ssm:GetCommandInvocation"]) if contains(tolist(s.resources), "*")
       ]
     ]))
     error_message = "Only the read actions, which have no resource-level permissions, may use a * resource."

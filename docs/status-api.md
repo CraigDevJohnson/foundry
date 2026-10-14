@@ -22,8 +22,8 @@ that environment's site role, `site-<env>-server`. The site signs each request
 an unsigned request gets `403` from AWS and never reaches the controller.
 
 The controller does no sign-in of its own. The site checks the Member's grant
-before it calls: `foundry` or `foundry-admin` for the status, and
-`foundry-admin` alone for start and stop.
+before it calls: `foundry` or `foundry-admin`, for the status and for start
+and stop alike.
 Those grants are the gate on which Members see the status and change the
 host. The site names the Member in the `X-Lobby-Member` header. Reads ignore it
 and never log it. Start and stop log it as who asked, but only when the
@@ -79,7 +79,7 @@ URL, AWS role or command: those come only from the function's configuration.
   | `host` | `pending`, `running`, `stopping`, `stopped`, `shutting-down`, `unknown` | EC2's lifecycle state for the configured instance |
   | `agent` | `online`, `offline`, `unknown`, `not_checked` | Whether the Systems Manager agent is connected. A missing record is `unknown`, not `offline` |
   | `foundry` | `responding`, `unexpected_response`, `unreachable`, `unknown`, `not_checked` | Whether the join page answered HTTP 200 within the time and size limits |
-  | `stop` | `none`, `in_progress`, `succeeded`, `failed`, `unknown`, `not_checked` | The latest stop sent since EC2 last started the host: none, still running (or being cancelled), done (Foundry is down and the host powers off a minute later), or failed, timed out or cancelled (the host stays on) |
+  | `stop` | `none`, `in_progress`, `succeeded`, `failed`, `unknown`, `not_checked` | The stop recorded on the host, if it was sent since EC2 last started the host: none, still running (or being cancelled), done (Foundry is down and the host powers off a minute later), or failed, timed out or cancelled (the host stays on) |
 
   `agent`, `foundry` and `stop` are `not_checked` unless EC2 reports the host
   `running`; `stop` is also `not_checked` when EC2 gave no start time to count
@@ -127,9 +127,13 @@ are ignored. Anything else answers `400` with
 - `202` with the status, `state` `stopping` and `checks.stop` `in_progress`,
   when the `foundry-stop` command was sent. It shuts Foundry down as
   `task host:stop` does, then powers the host off a minute later; EC2 stops
-  it. The status follows it from there: `stopping`, then `stopped`. If the
-  shutdown fails, the host stays on, `checks.stop` turns `failed` and the
-  state follows the host again.
+  it. Right after sending it, the controller records it on the host's tags,
+  `foundry:stop-command` and `foundry:stop-requested`, and the status follows
+  it from there: `stopping`, then `stopped`. If the shutdown fails, the host
+  stays on, `checks.stop` turns `failed` and the state follows the host
+  again. If the tags can't be written, the answer is still `202` and the log
+  says `sent_not_recorded`: the status can't show that stop until the host
+  powers off.
 - `200` with the current status when there is nothing to stop: the host is
   already `stopped` or `stopping`, or a stop is under way. So a stop requested
   after another was sent answers this way and sends nothing; two requests at
@@ -141,8 +145,8 @@ are ignored. Anything else answers `400` with
   Systems Manager agent to send the stop to, for example in the first minute
   after it booted. Nothing was sent.
 - `404` with `{"code": "no_server"}` as for `GET /server`.
-- `503` with `{"code": "status_unknown"}` when EC2's state, or the stops sent
-  since the host started, could not be read: a second stop could overlap the
+- `503` with `{"code": "status_unknown"}` when EC2's state, or the stop
+  recorded on the host, could not be read: a second stop could overlap the
   first, so none is sent. `{"code": "stop_failed"}` when Systems Manager
   refused the command for another reason or its answer didn't arrive in time.
   The command may have been sent then, and `checks.stop` shows it if so.
@@ -183,16 +187,19 @@ Every answer carries `Cache-Control: no-store`, and every JSON body
 
 ## How it observes
 
-1. EC2 `DescribeInstances` for the configured instance only.
+1. EC2 `DescribeInstances` for the configured instance only, which also gives
+   its tags.
 2. If EC2 reports it `running`, at the same time and independently of each
    other: Systems Manager `DescribeInstanceInformation` for that instance, an
-   HTTPS `GET` of the join page, and Systems Manager `ListCommands` for the
-   `foundry-stop` commands sent since EC2's `LaunchTime`. They are listed by
-   document and time, not by instance, because Systems Manager may not list a
-   stop against the instance before it reaches the agent. Commands sent to
-   other instances are skipped; the latest one sent to this one decides
-   `checks.stop`. A record for another document, from before that time, sent
-   by tag or to no instance, or more than one page of them, is `unknown`.
+   HTTPS `GET` of the join page, and, when the host's tags record a stop sent
+   since EC2's `LaunchTime`, Systems Manager `GetCommandInvocation` for that
+   command on that instance, which decides `checks.stop`. Systems Manager may
+   have no record of a command for a short while after it is sent: for 2
+   minutes that counts as `in_progress`, and after that as `unknown`. A tag
+   that is not a command ID or a time, or a record for another command,
+   instance or document, is `unknown`. The controller never lists commands:
+   `ListCommands` would show every command sent in the account, with its
+   parameters.
 
 They are taken during one request, not as an atomic snapshot. The whole
 observation is bounded at 6 seconds, because the site's client gives up at 7
@@ -245,9 +252,10 @@ come from the SDK's standard chain: the function's role on Lambda, your own
 locally.
 
 The runtime needs `ec2:DescribeInstances`, `ssm:DescribeInstanceInformation`
-and `ssm:ListCommands` to observe, `ec2:StartInstances` on the host to start
-it, `ssm:SendCommand` on the host and the `foundry-stop` document to stop it,
-and its own log group. It can't call `ec2:StopInstances` or send any other
+and `ssm:GetCommandInvocation` to observe, `ec2:StartInstances` on the host to
+start it, `ssm:SendCommand` on the host and the `foundry-stop` document and
+`ec2:CreateTags` on the host for its two stop tags to stop it, and its own log
+group. It can't call `ec2:StopInstances` or send any other
 command.
 
 ## Running it locally

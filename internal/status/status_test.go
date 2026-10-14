@@ -37,15 +37,30 @@ type probeFunc func(context.Context, string) HTTPSObservation
 
 func (f probeFunc) Probe(ctx context.Context, url string) HTTPSObservation { return f(ctx, url) }
 
-type commandsFunc func(context.Context, *ssm.ListCommandsInput) (*ssm.ListCommandsOutput, error)
+type invocationFunc func(context.Context, *ssm.GetCommandInvocationInput) (*ssm.GetCommandInvocationOutput, error)
 
-func (f commandsFunc) ListCommands(ctx context.Context, in *ssm.ListCommandsInput, _ ...func(*ssm.Options)) (*ssm.ListCommandsOutput, error) {
+func (f invocationFunc) GetCommandInvocation(ctx context.Context, in *ssm.GetCommandInvocationInput, _ ...func(*ssm.Options)) (*ssm.GetCommandInvocationOutput, error) {
 	return f(ctx, in)
 }
 
-// stopCommand is a stop sent to the host at requested, in the given state.
-func stopCommand(status ssmtypes.CommandStatus, requested time.Time) ssmtypes.Command {
-	return ssmtypes.Command{CommandId: aws.String("c-" + requested.Format("150405")), DocumentName: aws.String(StopDocument), InstanceIds: []string{testInstanceID}, RequestedDateTime: aws.Time(requested), Status: status}
+// testCommand is the stop recorded on the host in the tests.
+const testCommand = "0b1c2d3e-4f5a-4b6c-8d7e-9f0a1b2c3d4e"
+
+// withStop records a stop on the host's tags, as the controller does.
+func withStop(output *ec2.DescribeInstancesOutput, command, requested string) *ec2.DescribeInstancesOutput {
+	instance := &output.Reservations[0].Instances[0]
+	if command != "" {
+		instance.Tags = append(instance.Tags, ec2types.Tag{Key: aws.String(StopCommandTag), Value: aws.String(command)})
+	}
+	if requested != "" {
+		instance.Tags = append(instance.Tags, ec2types.Tag{Key: aws.String(StopRequestedTag), Value: aws.String(requested)})
+	}
+	return output
+}
+
+// invocation is the stop's record on the host, in the given state.
+func invocation(status ssmtypes.CommandInvocationStatus) *ssm.GetCommandInvocationOutput {
+	return &ssm.GetCommandInvocationOutput{CommandId: aws.String(testCommand), InstanceId: aws.String(testInstanceID), DocumentName: aws.String(StopDocument), Status: status}
 }
 
 func hostOutput(state string) *ec2.DescribeInstancesOutput {
@@ -53,6 +68,7 @@ func hostOutput(state string) *ec2.DescribeInstancesOutput {
 		InstanceId: aws.String(testInstanceID),
 		State:      &ec2types.InstanceState{Name: ec2types.InstanceStateName(state)},
 		LaunchTime: aws.Time(testLaunch),
+		Tags:       []ec2types.Tag{{Key: aws.String("Name"), Value: aws.String("foundry")}},
 	}}}}}
 }
 func agentOutput(state string) *ssm.DescribeInstanceInformationOutput {
@@ -83,28 +99,20 @@ func testService(t *testing.T) *Service {
 			checkDeadline(t, ctx)
 			return HTTPSObservation{Observation: Observation{State: "responding", Reason: "observed"}, HTTPStatus: 200}
 		}),
-		Commands: commandsFunc(func(ctx context.Context, in *ssm.ListCommandsInput) (*ssm.ListCommandsOutput, error) {
-			checkStopQuery(t, in)
-			checkDeadline(t, ctx)
-			return &ssm.ListCommandsOutput{}, nil
+		Commands: invocationFunc(func(context.Context, *ssm.GetCommandInvocationInput) (*ssm.GetCommandInvocationOutput, error) {
+			t.Error("a stop read with none recorded on the host")
+			return nil, nil
 		}),
 		Now: func() time.Time { return testNow },
 	}
 }
 
-// checkStopQuery fails the test unless the stops are asked for by the stop
-// document and the time EC2 last started the host, and not by instance, which
-// could leave out a stop still pending.
-func checkStopQuery(t *testing.T, in *ssm.ListCommandsInput) {
+// checkStopQuery fails the test unless only the recorded stop is asked for,
+// on only the host.
+func checkStopQuery(t *testing.T, in *ssm.GetCommandInvocationInput) {
 	t.Helper()
-	filters := map[ssmtypes.CommandFilterKey]string{}
-	for _, filter := range in.Filters {
-		filters[filter.Key] = aws.ToString(filter.Value)
-	}
-	if in.InstanceId != nil || in.CommandId != nil || len(in.Filters) != 2 ||
-		filters[ssmtypes.CommandFilterKeyDocumentName] != StopDocument ||
-		filters[ssmtypes.CommandFilterKeyInvokedAfter] != "2026-10-13T18:00:00Z" {
-		t.Errorf("unscoped ListCommands input: %+v", in)
+	if aws.ToString(in.CommandId) != testCommand || aws.ToString(in.InstanceId) != testInstanceID || in.PluginName != nil {
+		t.Errorf("unscoped GetCommandInvocation input: %+v", in)
 	}
 }
 func checkDeadline(t *testing.T, ctx context.Context) {
@@ -131,7 +139,7 @@ func TestNativeHostStatesAndDependentProbes(t *testing.T) {
 					t.Error("HTTPS called for non-running host")
 					return HTTPSObservation{}
 				})
-				s.Commands = commandsFunc(func(context.Context, *ssm.ListCommandsInput) (*ssm.ListCommandsOutput, error) {
+				s.Commands = invocationFunc(func(context.Context, *ssm.GetCommandInvocationInput) (*ssm.GetCommandInvocationOutput, error) {
 					t.Error("stops read for non-running host")
 					return nil, nil
 				})
@@ -155,12 +163,12 @@ func TestNativeHostStatesAndDependentProbes(t *testing.T) {
 
 func TestMissingLaunchTimeStaysMissing(t *testing.T) {
 	s := testService(t)
-	output := hostOutput("running")
+	output := withStop(hostOutput("running"), testCommand, "2026-10-13T18:01:00Z")
 	output.Reservations[0].Instances[0].LaunchTime = nil
 	s.EC2 = ec2Func(func(context.Context, *ec2.DescribeInstancesInput) (*ec2.DescribeInstancesOutput, error) {
 		return output, nil
 	})
-	s.Commands = commandsFunc(func(context.Context, *ssm.ListCommandsInput) (*ssm.ListCommandsOutput, error) {
+	s.Commands = invocationFunc(func(context.Context, *ssm.GetCommandInvocationInput) (*ssm.GetCommandInvocationOutput, error) {
 		t.Error("stops read without a start time to bound them")
 		return nil, nil
 	})
@@ -240,7 +248,7 @@ func TestUncertainHostRecords(t *testing.T) {
 				t.Error("HTTPS called for uncertain/absent host")
 				return HTTPSObservation{}
 			})
-			s.Commands = commandsFunc(func(context.Context, *ssm.ListCommandsInput) (*ssm.ListCommandsOutput, error) {
+			s.Commands = invocationFunc(func(context.Context, *ssm.GetCommandInvocationInput) (*ssm.GetCommandInvocationOutput, error) {
 				t.Error("stops read for uncertain/absent host")
 				return nil, nil
 			})
@@ -334,76 +342,76 @@ func TestIndependentProbesAndCallerDeadline(t *testing.T) {
 	}
 }
 
-// The latest stop sent since EC2 last started the host decides: one under way,
-// one that succeeded and one that failed are told apart, and a record that
-// does not match what was asked is never trusted.
+// The stop recorded on the host decides, if it was sent since EC2 last
+// started the host: one under way, one that succeeded and one that failed are
+// told apart, and a record that does not match what was asked is never
+// trusted.
 func TestStopsUnderWay(t *testing.T) {
 	launched := testLaunch.UTC()
-	early, late := launched.Add(5*time.Minute), launched.Add(30*time.Minute)
-	commands := func(list ...ssmtypes.Command) *ssm.ListCommandsOutput {
-		return &ssm.ListCommandsOutput{Commands: list}
-	}
-	foreign := stopCommand(ssmtypes.CommandStatusInProgress, late)
-	foreign.DocumentName = aws.String("AWS-RunShellScript")
-	before := stopCommand(ssmtypes.CommandStatusInProgress, launched.Add(-time.Minute))
-	undated := stopCommand(ssmtypes.CommandStatusInProgress, late)
-	undated.RequestedDateTime = nil
-	paginated := commands(stopCommand(ssmtypes.CommandStatusSuccess, late))
-	paginated.NextToken = aws.String("more")
-	elsewhere := stopCommand(ssmtypes.CommandStatusInProgress, late)
-	elsewhere.InstanceIds = []string{"i-fffffffffffffffff"}
-	alongside := stopCommand(ssmtypes.CommandStatusInProgress, late)
-	alongside.InstanceIds = []string{"i-fffffffffffffffff", testInstanceID}
-	byTag := stopCommand(ssmtypes.CommandStatusInProgress, late)
-	byTag.InstanceIds = nil
-	byTag.Targets = []ssmtypes.Target{{Key: aws.String("tag:project"), Values: []string{"foundry"}}}
-	untargeted := stopCommand(ssmtypes.CommandStatusInProgress, late)
-	untargeted.InstanceIds = nil
+	sent := launched.Add(time.Minute)       // 2m12s before testNow
+	recent := launched.Add(2 * time.Minute) // 1m12s before testNow
+	at := func(when time.Time) string { return when.Format(time.RFC3339) }
+	otherCommand := invocation(ssmtypes.CommandInvocationStatusInProgress)
+	otherCommand.CommandId = aws.String("ffffffff-4f5a-4b6c-8d7e-9f0a1b2c3d4e")
+	otherInstance := invocation(ssmtypes.CommandInvocationStatusInProgress)
+	otherInstance.InstanceId = aws.String("i-fffffffffffffffff")
+	otherDocument := invocation(ssmtypes.CommandInvocationStatusInProgress)
+	otherDocument.DocumentName = aws.String("AWS-RunShellScript")
+	notYet := &smithy.GenericAPIError{Code: "InvocationDoesNotExist"}
 	tests := []struct {
-		name          string
-		output        *ssm.ListCommandsOutput
-		err           error
-		state, reason string
-		requested     time.Time
+		name               string
+		command, requested string
+		output             *ssm.GetCommandInvocationOutput
+		err                error
+		state, reason      string
+		at                 time.Time
 	}{
-		{"none", commands(), nil, "none", "observed", time.Time{}},
-		{"pending", commands(stopCommand(ssmtypes.CommandStatusPending, late)), nil, "in_progress", "observed", late},
-		{"in progress", commands(stopCommand(ssmtypes.CommandStatusInProgress, late)), nil, "in_progress", "observed", late},
-		{"cancelling", commands(stopCommand(ssmtypes.CommandStatusCancelling, late)), nil, "in_progress", "observed", late},
-		{"succeeded", commands(stopCommand(ssmtypes.CommandStatusSuccess, late)), nil, "succeeded", "observed", late},
-		{"failed", commands(stopCommand(ssmtypes.CommandStatusFailed, late)), nil, "failed", "observed", late},
-		{"timed out", commands(stopCommand(ssmtypes.CommandStatusTimedOut, late)), nil, "failed", "observed", late},
-		{"cancelled", commands(stopCommand(ssmtypes.CommandStatusCancelled, late)), nil, "failed", "observed", late},
-		{"latest first", commands(stopCommand(ssmtypes.CommandStatusInProgress, late), stopCommand(ssmtypes.CommandStatusFailed, early)), nil, "in_progress", "observed", late},
-		{"latest last", commands(stopCommand(ssmtypes.CommandStatusFailed, early), stopCommand(ssmtypes.CommandStatusSuccess, late)), nil, "succeeded", "observed", late},
-		{"unexpected status", commands(stopCommand("Exploded", late)), nil, "unknown", "unexpected_state", late},
-		{"another instance only", commands(elsewhere), nil, "none", "observed", time.Time{}},
-		{"another instance's later stop", commands(stopCommand(ssmtypes.CommandStatusFailed, early), elsewhere), nil, "failed", "observed", early},
-		{"this and another instance", commands(alongside), nil, "in_progress", "observed", late},
-		{"sent by tag", commands(byTag), nil, "unknown", "unexpected_record", time.Time{}},
-		{"sent to nothing", commands(untargeted), nil, "unknown", "unexpected_record", time.Time{}},
-		{"another document", commands(foreign), nil, "unknown", "unexpected_record", time.Time{}},
-		{"before this start", commands(before), nil, "unknown", "unexpected_record", time.Time{}},
-		{"no time", commands(undated), nil, "unknown", "unexpected_record", time.Time{}},
-		{"partial page", paginated, nil, "unknown", "unexpected_record", time.Time{}},
-		{"nil", nil, nil, "unknown", "unexpected_record", time.Time{}},
-		{"denied", nil, &smithy.GenericAPIError{Code: "AccessDeniedException", Message: "sensitive provider detail"}, "unknown", "access_denied", time.Time{}},
-		{"failed call", nil, errors.New("sensitive provider detail"), "unknown", "provider_error", time.Time{}},
+		{"none recorded", "", "", nil, nil, "none", "observed", time.Time{}},
+		{"before this start", testCommand, at(launched.Add(-time.Minute)), nil, nil, "none", "observed", time.Time{}},
+		{"pending", testCommand, at(sent), invocation(ssmtypes.CommandInvocationStatusPending), nil, "in_progress", "observed", sent},
+		{"in progress", testCommand, at(sent), invocation(ssmtypes.CommandInvocationStatusInProgress), nil, "in_progress", "observed", sent},
+		{"delayed", testCommand, at(sent), invocation(ssmtypes.CommandInvocationStatusDelayed), nil, "in_progress", "observed", sent},
+		{"cancelling", testCommand, at(sent), invocation(ssmtypes.CommandInvocationStatusCancelling), nil, "in_progress", "observed", sent},
+		{"succeeded", testCommand, at(sent), invocation(ssmtypes.CommandInvocationStatusSuccess), nil, "succeeded", "observed", sent},
+		{"failed", testCommand, at(sent), invocation(ssmtypes.CommandInvocationStatusFailed), nil, "failed", "observed", sent},
+		{"timed out", testCommand, at(sent), invocation(ssmtypes.CommandInvocationStatusTimedOut), nil, "failed", "observed", sent},
+		{"cancelled", testCommand, at(sent), invocation(ssmtypes.CommandInvocationStatusCancelled), nil, "failed", "observed", sent},
+		{"unexpected status", testCommand, at(sent), invocation("Exploded"), nil, "unknown", "unexpected_state", sent},
+		{"not recorded yet", testCommand, at(recent), nil, notYet, "in_progress", "not_recorded_yet", recent},
+		{"never recorded", testCommand, at(sent), nil, notYet, "unknown", "no_record", sent},
+		{"only the command", testCommand, "", nil, nil, "unknown", "unexpected_record", time.Time{}},
+		{"only the time", "", at(sent), nil, nil, "unknown", "unexpected_record", time.Time{}},
+		{"not a command ID", "c-180100", at(sent), nil, nil, "unknown", "unexpected_record", time.Time{}},
+		{"not a time", testCommand, "yesterday", nil, nil, "unknown", "unexpected_record", time.Time{}},
+		{"another command", testCommand, at(sent), otherCommand, nil, "unknown", "unexpected_record", sent},
+		{"another instance", testCommand, at(sent), otherInstance, nil, "unknown", "unexpected_record", sent},
+		{"another document", testCommand, at(sent), otherDocument, nil, "unknown", "unexpected_record", sent},
+		{"nil", testCommand, at(sent), nil, nil, "unknown", "unexpected_record", sent},
+		{"denied", testCommand, at(sent), nil, &smithy.GenericAPIError{Code: "AccessDeniedException", Message: "sensitive provider detail"}, "unknown", "access_denied", sent},
+		{"failed call", testCommand, at(sent), nil, errors.New("sensitive provider detail"), "unknown", "provider_error", sent},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			s := testService(t)
-			s.Commands = commandsFunc(func(ctx context.Context, in *ssm.ListCommandsInput) (*ssm.ListCommandsOutput, error) {
+			s.EC2 = ec2Func(func(context.Context, *ec2.DescribeInstancesInput) (*ec2.DescribeInstancesOutput, error) {
+				return withStop(hostOutput("running"), test.command, test.requested), nil
+			})
+			asked := false
+			s.Commands = invocationFunc(func(ctx context.Context, in *ssm.GetCommandInvocationInput) (*ssm.GetCommandInvocationOutput, error) {
+				asked = true
 				checkStopQuery(t, in)
 				checkDeadline(t, ctx)
 				return test.output, test.err
 			})
 			r := s.Observe(context.Background())
-			if r.Stop.State != test.state || r.Stop.Reason != test.reason || !r.Stop.RequestedAt.Equal(test.requested) {
+			if r.Stop.State != test.state || r.Stop.Reason != test.reason || !r.Stop.RequestedAt.Equal(test.at) {
 				t.Fatalf("stop=%+v", r.Stop)
 			}
-			if !test.requested.IsZero() && r.Stop.RequestedAt.Location() != time.UTC {
+			if !test.at.IsZero() && r.Stop.RequestedAt.Location() != time.UTC {
 				t.Fatalf("requested at %v", r.Stop.RequestedAt)
+			}
+			if asked != !test.at.IsZero() {
+				t.Fatalf("asked Systems Manager: %v", asked)
 			}
 			if r.SSM.State != "online" || r.HTTPS.State != "responding" {
 				t.Fatalf("the stop check changed the others: %+v %+v", r.SSM, r.HTTPS)

@@ -334,17 +334,22 @@ func (h *Handler) stop(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	command, err := h.Change.Stop(ctx)
-	if errors.Is(err, control.ErrAgentOffline) {
+	switch {
+	case errors.Is(err, control.ErrAgentOffline):
 		h.logChange(ctx, slog.LevelInfo, "stop", "refused_agent_offline", who, report)
 		writeJSON(w, http.StatusConflict, map[string]string{"code": "agent_offline"})
 		return
-	}
-	if err != nil {
+	case errors.Is(err, control.ErrStopNotRecorded):
+		// The stop is under way, but until the host powers off the status
+		// can't show it, nor hold off a second stop.
+		h.logChange(ctx, slog.LevelError, "stop", "sent_not_recorded", who, report, "command_id", command, "err", err.Error())
+	case err != nil:
 		h.logChange(ctx, slog.LevelError, "stop", "failed", who, report, "err", err.Error())
 		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"code": "stop_failed"})
 		return
+	default:
+		h.logChange(ctx, slog.LevelInfo, "stop", "sent", who, report, "command_id", command)
 	}
-	h.logChange(ctx, slog.LevelInfo, "stop", "sent", who, report, "command_id", command)
 	sent := report
 	sent.ObservedAt = h.now().UTC()
 	sent.Stop = status.StopObservation{Observation: status.Observation{State: "in_progress", Reason: "sent"}, RequestedAt: sent.ObservedAt}

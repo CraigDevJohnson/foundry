@@ -8,7 +8,7 @@ package status
 import (
 	"context"
 	"errors"
-	"slices"
+	"regexp"
 	"sync"
 	"time"
 
@@ -26,6 +26,23 @@ const ProviderTimeout = 3 * time.Second
 // host (infra/controller.tf): it shuts Foundry down, then powers the host off.
 const StopDocument = "foundry-stop"
 
+// The controller records the latest stop on the host itself, under these
+// tags (internal/control): the command's ID, and when it was sent in RFC 3339.
+// The status follows that one command with GetCommandInvocation, so it never
+// lists the account's commands.
+const (
+	StopCommandTag   = "foundry:stop-command"
+	StopRequestedTag = "foundry:stop-requested"
+)
+
+// invocationGrace is how long after a stop was sent Systems Manager may still
+// answer that it has no such invocation: it records one only once the command
+// is under way, eventually.
+const invocationGrace = 2 * time.Minute
+
+// commandID is the form of a Systems Manager command ID.
+var commandID = regexp.MustCompile(`^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$`)
+
 type EC2Reader interface {
 	DescribeInstances(context.Context, *ec2.DescribeInstancesInput, ...func(*ec2.Options)) (*ec2.DescribeInstancesOutput, error)
 }
@@ -38,8 +55,8 @@ type HTTPSProber interface {
 	Probe(context.Context, string) HTTPSObservation
 }
 
-type CommandLister interface {
-	ListCommands(context.Context, *ssm.ListCommandsInput, ...func(*ssm.Options)) (*ssm.ListCommandsOutput, error)
+type CommandReader interface {
+	GetCommandInvocation(context.Context, *ssm.GetCommandInvocationInput, ...func(*ssm.Options)) (*ssm.GetCommandInvocationOutput, error)
 }
 
 // Observation is one component's state and the fixed reason for it.
@@ -50,9 +67,12 @@ type Observation struct {
 
 // HostObservation is EC2's view of the instance. LaunchTime is when EC2 last
 // started it, which EC2 resets on every start; it is zero when EC2 gave none.
+// StopCommand and StopRequested are the host's stop tags, empty when absent.
 type HostObservation struct {
 	Observation
-	LaunchTime time.Time
+	LaunchTime    time.Time
+	StopCommand   string
+	StopRequested string
 }
 
 type SSMObservation struct {
@@ -88,7 +108,7 @@ type Service struct {
 	EC2      EC2Reader
 	SSM      SSMReader
 	HTTPS    HTTPSProber
-	Commands CommandLister
+	Commands CommandReader
 	// Now is the clock ObservedAt is read from; nil means time.Now.
 	Now func() time.Time
 }
@@ -116,7 +136,7 @@ func (s *Service) Observe(ctx context.Context) Report {
 			defer cancel()
 			https = s.HTTPS.Probe(probeCtx, s.Config.HTTPSURL)
 		}()
-		go func() { defer pending.Done(); stop = s.stop(ctx, host.LaunchTime) }()
+		go func() { defer pending.Done(); stop = s.stop(ctx, host) }()
 		pending.Wait()
 	}
 	return Report{Host: host, SSM: ssmObservation, HTTPS: https, Stop: stop, ObservedAt: s.now().UTC()}
@@ -144,7 +164,7 @@ func (s *Service) host(ctx context.Context) HostObservation {
 		return hostObservation("unknown", "unexpected_record")
 	}
 	count := 0
-	var state string
+	var state, stopCommand, stopRequested string
 	var launched time.Time
 	for _, reservation := range output.Reservations {
 		for _, instance := range reservation.Instances {
@@ -154,6 +174,14 @@ func (s *Service) host(ctx context.Context) HostObservation {
 			}
 			state = string(instance.State.Name)
 			launched = aws.ToTime(instance.LaunchTime).UTC()
+			for _, tag := range instance.Tags {
+				switch aws.ToString(tag.Key) {
+				case StopCommandTag:
+					stopCommand = aws.ToString(tag.Value)
+				case StopRequestedTag:
+					stopRequested = aws.ToString(tag.Value)
+				}
+			}
 		}
 	}
 	if count == 0 {
@@ -166,6 +194,7 @@ func (s *Service) host(ctx context.Context) HostObservation {
 	case "pending", "running", "shutting-down", "terminated", "stopping", "stopped":
 		result := hostObservation(state, "observed")
 		result.LaunchTime = launched
+		result.StopCommand, result.StopRequested = stopCommand, stopRequested
 		return result
 	default:
 		return hostObservation("unknown", "unexpected_state")
@@ -207,55 +236,57 @@ func (s *Service) agent(ctx context.Context) SSMObservation {
 	return result
 }
 
-// stop finds the latest stop sent to the host since EC2 last started it, so a
-// stop from an earlier run never counts. Without a start time there is no
-// such bound, and nothing is guessed. The commands are listed by document and
-// time, not by instance: Systems Manager may list a command against an
-// instance only once it reaches the instance, and a stop still pending must
-// count. Each one names the instances it was sent to.
-func (s *Service) stop(ctx context.Context, launched time.Time) StopObservation {
-	if launched.IsZero() {
+// stop follows the latest stop sent to the host, which the controller recorded
+// on the host's tags, if it was sent since EC2 last started the host: a stop
+// from an earlier run never counts. Without a start time there is no such
+// bound, and nothing is guessed.
+func (s *Service) stop(ctx context.Context, host HostObservation) StopObservation {
+	if host.LaunchTime.IsZero() {
 		return StopObservation{Observation: Observation{State: "not_checked", Reason: "no_launch_time"}}
+	}
+	if host.StopCommand == "" && host.StopRequested == "" {
+		return StopObservation{Observation: Observation{State: "none", Reason: "observed"}}
+	}
+	requested, err := time.Parse(time.RFC3339, host.StopRequested)
+	if err != nil || !commandID.MatchString(host.StopCommand) {
+		return StopObservation{Observation: Observation{State: "unknown", Reason: "unexpected_record"}}
+	}
+	requested = requested.UTC()
+	if requested.Before(host.LaunchTime) {
+		return StopObservation{Observation: Observation{State: "none", Reason: "observed"}}
 	}
 	ctx, cancel := context.WithTimeout(ctx, ProviderTimeout)
 	defer cancel()
-	output, err := s.Commands.ListCommands(ctx, &ssm.ListCommandsInput{
-		Filters: []ssmtypes.CommandFilter{
-			{Key: ssmtypes.CommandFilterKeyDocumentName, Value: aws.String(StopDocument)},
-			{Key: ssmtypes.CommandFilterKeyInvokedAfter, Value: aws.String(launched.UTC().Format(time.RFC3339))},
-		},
-		MaxResults: aws.Int32(50),
+	output, err := s.Commands.GetCommandInvocation(ctx, &ssm.GetCommandInvocationInput{
+		CommandId:  aws.String(host.StopCommand),
+		InstanceId: aws.String(s.Config.InstanceID),
 	})
+	result := StopObservation{Observation: Observation{State: "unknown", Reason: "unexpected_state"}, RequestedAt: requested}
 	if err != nil {
-		return StopObservation{Observation: Observation{State: "unknown", Reason: providerReason(err)}}
-	}
-	if output == nil || aws.ToString(output.NextToken) != "" {
-		return StopObservation{Observation: Observation{State: "unknown", Reason: "unexpected_record"}}
-	}
-	var latest *ssmtypes.Command
-	for i := range output.Commands {
-		command := &output.Commands[i]
-		if aws.ToString(command.DocumentName) != StopDocument || command.RequestedDateTime == nil || command.RequestedDateTime.Before(launched) ||
-			len(command.Targets) != 0 || len(command.InstanceIds) == 0 {
-			return StopObservation{Observation: Observation{State: "unknown", Reason: "unexpected_record"}}
+		var apiError smithy.APIError
+		if errors.As(err, &apiError) && apiError.ErrorCode() == "InvocationDoesNotExist" {
+			if s.now().Sub(requested) < invocationGrace {
+				result.State, result.Reason = "in_progress", "not_recorded_yet"
+				return result
+			}
+			result.Reason = "no_record"
+			return result
 		}
-		if !slices.Contains(command.InstanceIds, s.Config.InstanceID) {
-			continue
-		}
-		if latest == nil || command.RequestedDateTime.After(*latest.RequestedDateTime) {
-			latest = command
-		}
+		result.Reason = providerReason(err)
+		return result
 	}
-	if latest == nil {
-		return StopObservation{Observation: Observation{State: "none", Reason: "observed"}}
+	if output == nil || aws.ToString(output.CommandId) != host.StopCommand || aws.ToString(output.InstanceId) != s.Config.InstanceID ||
+		aws.ToString(output.DocumentName) != StopDocument {
+		result.Reason = "unexpected_record"
+		return result
 	}
-	result := StopObservation{Observation: Observation{State: "unknown", Reason: "unexpected_state"}, RequestedAt: latest.RequestedDateTime.UTC()}
-	switch latest.Status {
-	case ssmtypes.CommandStatusPending, ssmtypes.CommandStatusInProgress, ssmtypes.CommandStatusCancelling:
+	switch output.Status {
+	case ssmtypes.CommandInvocationStatusPending, ssmtypes.CommandInvocationStatusInProgress,
+		ssmtypes.CommandInvocationStatusDelayed, ssmtypes.CommandInvocationStatusCancelling:
 		result.State, result.Reason = "in_progress", "observed"
-	case ssmtypes.CommandStatusSuccess:
+	case ssmtypes.CommandInvocationStatusSuccess:
 		result.State, result.Reason = "succeeded", "observed"
-	case ssmtypes.CommandStatusFailed, ssmtypes.CommandStatusTimedOut, ssmtypes.CommandStatusCancelled:
+	case ssmtypes.CommandInvocationStatusFailed, ssmtypes.CommandInvocationStatusTimedOut, ssmtypes.CommandInvocationStatusCancelled:
 		result.State, result.Reason = "failed", "observed"
 	}
 	return result

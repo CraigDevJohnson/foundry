@@ -305,7 +305,7 @@ The Lobby's Foundry Tool reads the host's state from the controller,
 environment (`infra/controller.tf`; deploying it is in
 [infra](../infra/README.md#deploying-the-controller)): EC2's state, the SSM
 agent's connectivity, whether `/join` answers and whether a stop is under way.
-A Member with the site's `foundry-admin` grant can also start and stop the host
+A Member with the site's `foundry` or `foundry-admin` grant can also start and stop the host
 through it ([ADR 0006](adr/0006-the-lobby-starts-and-stops-the-host.md),
 [status API](status-api.md)). A start is an EC2 start. A stop, once the Member
 confirms nobody is playing, sends the `foundry-stop` document: the same
@@ -317,14 +317,16 @@ host stays on, as with `host:stop`.
 A failed, timed-out or cancelled `foundry-stop` emails through the workloads
 `alerts` topic (the `foundry-stop-failed` EventBridge rule). Foundry may then be
 down while the host runs. Read the command's output, then stop it with
-`task host:stop` or the Host control workflow, or start Foundry again. Reading
-command output uses `workloads-admin`, so an agent asks Craig first:
+`task host:stop` or the Host control workflow, or start Foundry again. The
+alert names the command (`command-id`), and the host's `foundry:stop-command`
+tag holds the latest one. Reading command output uses `workloads-admin`, so an
+agent asks Craig first:
 
 ```sh
-aws ssm list-commands --filters key=DocumentName,value=foundry-stop \
-  --query 'reverse(sort_by(Commands, &RequestedDateTime))[:5].[CommandId, Status, RequestedDateTime]' \
+aws ec2 describe-instances --instance-ids i-05dfb9abbc1caac32 \
+  --query 'Reservations[0].Instances[0].Tags[?starts_with(Key, `foundry:stop`)]' \
   --output table --profile workloads-admin
-aws ssm get-command-invocation --command-id <id> --instance-id <instance> --profile workloads-admin
+aws ssm get-command-invocation --command-id <id> --instance-id i-05dfb9abbc1caac32 --profile workloads-admin
 ```
 
 Each start and stop is a `start` or `stop` line in the function's log, with

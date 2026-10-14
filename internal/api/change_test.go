@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
@@ -52,10 +53,10 @@ func (c *changer) Stop(ctx context.Context) (string, error) {
 	defer c.mu.Unlock()
 	c.stops++
 	c.record(ctx)
-	if c.stopErr != nil {
+	if c.stopErr != nil && !errors.Is(c.stopErr, control.ErrStopNotRecorded) {
 		return "", c.stopErr
 	}
-	return "0b1c2d3e-0000-4000-8000-000000000001", nil
+	return "0b1c2d3e-0000-4000-8000-000000000001", c.stopErr
 }
 
 func (c *changer) record(ctx context.Context) {
@@ -315,6 +316,21 @@ func TestStopFailures(t *testing.T) {
 	recorder := post(h, "/server/stop", confirmation)
 	checkCode(t, recorder, http.StatusServiceUnavailable, "stop_failed")
 	if !strings.Contains(logs.String(), `"level":"ERROR","msg":"stop","outcome":"failed"`) {
+		t.Errorf("logs %s", logs)
+	}
+}
+
+// A stop that was sent but could not be recorded on the host is still under
+// way: the answer says so, and the log says the status can't follow it.
+func TestAStopNotRecordedIsStillSent(t *testing.T) {
+	h, logs := changeServer(fixed(readyHost), &changer{stopErr: fmt.Errorf("%w: %w", control.ErrStopNotRecorded, errors.New("tagging refused"))})
+	a := decodeStatus(t, post(h, "/server/stop", confirmation), http.StatusAccepted)
+	if a.State != Stopping || a.Checks["stop"] != "in_progress" {
+		t.Fatalf("%+v", a)
+	}
+	if !strings.Contains(logs.String(), `"level":"ERROR","msg":"stop","outcome":"sent_not_recorded"`) ||
+		!strings.Contains(logs.String(), `"command_id":"0b1c2d3e-0000-4000-8000-000000000001"`) ||
+		strings.Contains(logs.String(), `"outcome":"sent",`) {
 		t.Errorf("logs %s", logs)
 	}
 }

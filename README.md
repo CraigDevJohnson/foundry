@@ -85,7 +85,7 @@ management plane is relied upon.
 - [Status API](docs/status-api.md) documents the controller's HTTP interface:
   `GET /server`, which The Lobby's site serves at `/api/foundry/server` for its
   `/foundry` page, and `POST /server/start` and `POST /server/stop` for its
-  Foundry Admins ([ADR 0006](docs/adr/0006-the-lobby-starts-and-stops-the-host.md)).
+  Members with Foundry access ([ADR 0006](docs/adr/0006-the-lobby-starts-and-stops-the-host.md)).
 
 ## Development
 
@@ -108,7 +108,7 @@ through an `AWS_IAM` Function URL, one function per Lobby site environment
 [ADR 0006](docs/adr/0006-the-lobby-starts-and-stops-the-host.md),
 [infra/controller.tf](infra/controller.tf)); `task run` serves it on your
 computer with your AWS credentials. It reads EC2, the Systems Manager agent,
-Foundry's join page and the stops sent to the host. Local recovery-set
+Foundry's join page and the stop recorded on the host. Local recovery-set
 capture/validation/materialization is now available for offline testing;
 cloud backups, session operations and live recovery remain tracked in the
 [first-release backlog](https://github.com/CraigDevJohnson/foundry/issues/2).

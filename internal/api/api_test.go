@@ -252,20 +252,19 @@ func running(launched time.Time) *ec2.DescribeInstancesOutput {
 	}}}}}
 }
 
-type commandsFunc func(context.Context) (*ssm.ListCommandsOutput, error)
+// noStops answers for a host with no stop recorded on its tags, so it is
+// never asked.
+type noStops struct{}
 
-func (f commandsFunc) ListCommands(ctx context.Context, _ *ssm.ListCommandsInput, _ ...func(*ssm.Options)) (*ssm.ListCommandsOutput, error) {
-	return f(ctx)
+func (noStops) GetCommandInvocation(context.Context, *ssm.GetCommandInvocationInput, ...func(*ssm.Options)) (*ssm.GetCommandInvocationOutput, error) {
+	return nil, errors.New("no stop is recorded on the host")
 }
-
-// noStops is a host that has had no stop since it started.
-var noStops = commandsFunc(func(context.Context) (*ssm.ListCommandsOutput, error) { return &ssm.ListCommandsOutput{}, nil })
 
 // service is the real observation engine over fake providers.
 func service(ec2Reader status.EC2Reader, ssmReader status.SSMReader, prober status.HTTPSProber) *status.Service {
 	return &status.Service{
 		Config: status.Config{Region: "us-west-2", InstanceID: instanceID, HTTPSURL: joinURL},
-		EC2:    ec2Reader, SSM: ssmReader, HTTPS: prober, Commands: noStops,
+		EC2:    ec2Reader, SSM: ssmReader, HTTPS: prober, Commands: noStops{},
 		Now: func() time.Time { return now },
 	}
 }

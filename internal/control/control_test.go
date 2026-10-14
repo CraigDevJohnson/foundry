@@ -24,6 +24,24 @@ func (f startFunc) StartInstances(ctx context.Context, in *ec2.StartInstancesInp
 	return f(ctx, in)
 }
 
+func (f startFunc) CreateTags(context.Context, *ec2.CreateTagsInput, ...func(*ec2.Options)) (*ec2.CreateTagsOutput, error) {
+	return nil, errors.New("a start must not tag the host")
+}
+
+type tagFunc func(context.Context, *ec2.CreateTagsInput) (*ec2.CreateTagsOutput, error)
+
+func (f tagFunc) StartInstances(context.Context, *ec2.StartInstancesInput, ...func(*ec2.Options)) (*ec2.StartInstancesOutput, error) {
+	return nil, errors.New("a stop must not start the host")
+}
+
+func (f tagFunc) CreateTags(ctx context.Context, in *ec2.CreateTagsInput, _ ...func(*ec2.Options)) (*ec2.CreateTagsOutput, error) {
+	return f(ctx, in)
+}
+
+const commandID = "0b1c2d3e-4f5a-4b6c-8d7e-9f0a1b2c3d4e"
+
+var sentAt = time.Date(2026, 10, 14, 2, 30, 5, 123, time.FixedZone("local", -7*3600))
+
 type sendFunc func(context.Context, *ssm.SendCommandInput) (*ssm.SendCommandOutput, error)
 
 // SendCommand fails the stop unless it is sent with retries turned off.
@@ -102,22 +120,45 @@ func TestStartFailures(t *testing.T) {
 }
 
 // Stop sends only the stop document, with no parameters, to only the
-// configured host, with a 60-second delivery timeout.
+// configured host, with a 60-second delivery timeout, then records the
+// command's ID and when it was sent on only the host's two stop tags.
 func TestStop(t *testing.T) {
-	s := &Service{InstanceID: instanceID, SSM: sendFunc(func(ctx context.Context, in *ssm.SendCommandInput) (*ssm.SendCommandOutput, error) {
-		if aws.ToString(in.DocumentName) != "foundry-stop" || aws.ToString(in.DocumentVersion) != "$LATEST" ||
-			len(in.InstanceIds) != 1 || in.InstanceIds[0] != instanceID || len(in.Targets) != 0 || len(in.Parameters) != 0 ||
-			aws.ToInt32(in.TimeoutSeconds) != 60 || in.ServiceRoleArn != nil || in.OutputS3BucketName != nil {
-			t.Errorf("unscoped stop: %+v", in)
-		}
-		checkDeadline(t, ctx)
-		return &ssm.SendCommandOutput{Command: &ssmtypes.Command{CommandId: aws.String("0b1c2d3e")}}, nil
-	})}
-	if command, err := s.Stop(context.Background()); command != "0b1c2d3e" || err != nil {
+	sent := false
+	s := &Service{
+		InstanceID: instanceID,
+		SSM: sendFunc(func(ctx context.Context, in *ssm.SendCommandInput) (*ssm.SendCommandOutput, error) {
+			if aws.ToString(in.DocumentName) != "foundry-stop" || aws.ToString(in.DocumentVersion) != "$LATEST" ||
+				len(in.InstanceIds) != 1 || in.InstanceIds[0] != instanceID || len(in.Targets) != 0 || len(in.Parameters) != 0 ||
+				aws.ToInt32(in.TimeoutSeconds) != 60 || in.ServiceRoleArn != nil || in.OutputS3BucketName != nil {
+				t.Errorf("unscoped stop: %+v", in)
+			}
+			checkDeadline(t, ctx)
+			sent = true
+			return &ssm.SendCommandOutput{Command: &ssmtypes.Command{CommandId: aws.String(commandID)}}, nil
+		}),
+		EC2: tagFunc(func(ctx context.Context, in *ec2.CreateTagsInput) (*ec2.CreateTagsOutput, error) {
+			if !sent {
+				t.Error("the stop was recorded before it was sent")
+			}
+			tags := map[string]string{}
+			for _, tag := range in.Tags {
+				tags[aws.ToString(tag.Key)] = aws.ToString(tag.Value)
+			}
+			if len(in.Resources) != 1 || in.Resources[0] != instanceID || len(in.Tags) != 2 ||
+				tags[status.StopCommandTag] != commandID || tags[status.StopRequestedTag] != "2026-10-14T09:30:05Z" {
+				t.Errorf("unscoped record: %+v", in)
+			}
+			checkDeadline(t, ctx)
+			return &ec2.CreateTagsOutput{}, nil
+		}),
+		Now: func() time.Time { return sentAt },
+	}
+	if command, err := s.Stop(context.Background()); command != commandID || err != nil {
 		t.Fatalf("%q %v", command, err)
 	}
 }
 
+// A stop that was not sent is never recorded.
 func TestStopFailures(t *testing.T) {
 	failure := errors.New("provider failure")
 	for _, test := range []struct {
@@ -133,13 +174,39 @@ func TestStopFailures(t *testing.T) {
 		{"no ID", &ssm.SendCommandOutput{Command: &ssmtypes.Command{}}, nil, nil},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			s := &Service{InstanceID: instanceID, SSM: sendFunc(func(context.Context, *ssm.SendCommandInput) (*ssm.SendCommandOutput, error) {
-				return test.output, test.err
-			})}
+			s := &Service{
+				InstanceID: instanceID,
+				SSM: sendFunc(func(context.Context, *ssm.SendCommandInput) (*ssm.SendCommandOutput, error) {
+					return test.output, test.err
+				}),
+				EC2: tagFunc(func(context.Context, *ec2.CreateTagsInput) (*ec2.CreateTagsOutput, error) {
+					t.Error("a stop that was not sent was recorded")
+					return nil, nil
+				}),
+			}
 			command, err := s.Stop(context.Background())
-			if command != "" || err == nil || (test.want != nil && !errors.Is(err, test.want)) {
+			if command != "" || err == nil || errors.Is(err, ErrStopNotRecorded) || (test.want != nil && !errors.Is(err, test.want)) {
 				t.Fatalf("%q %v", command, err)
 			}
 		})
+	}
+}
+
+// When only the record fails, the stop is still reported as sent, with its
+// ID, so the caller can say it is under way.
+func TestStopNotRecorded(t *testing.T) {
+	failure := &smithy.GenericAPIError{Code: "UnauthorizedOperation"}
+	s := &Service{
+		InstanceID: instanceID,
+		SSM: sendFunc(func(context.Context, *ssm.SendCommandInput) (*ssm.SendCommandOutput, error) {
+			return &ssm.SendCommandOutput{Command: &ssmtypes.Command{CommandId: aws.String(commandID)}}, nil
+		}),
+		EC2: tagFunc(func(context.Context, *ec2.CreateTagsInput) (*ec2.CreateTagsOutput, error) {
+			return nil, failure
+		}),
+	}
+	command, err := s.Stop(context.Background())
+	if command != commandID || !errors.Is(err, ErrStopNotRecorded) || !errors.Is(err, failure) {
+		t.Fatalf("%q %v", command, err)
 	}
 }

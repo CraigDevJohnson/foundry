@@ -42,6 +42,10 @@ locals {
   # policy before the document exists.
   stop_document_name = "foundry-stop"
   stop_document_arn  = "arn:aws:ssm:${local.region}:${local.workloads_account_id}:document/${local.stop_document_name}"
+
+  # The controller records the latest stop on the host under these tags
+  # (internal/status). The provider ignores them, so a plan never removes them.
+  stop_tag_keys = ["foundry:stop-command", "foundry:stop-requested"]
 }
 
 # Sent by the controller when The Lobby stops the host (ADR 0006). It has no
@@ -121,14 +125,16 @@ data "aws_iam_policy_document" "controller" {
   }
 
   # None of these has resource-level permissions, so all need *. The
-  # function asks only about the host in FOUNDRY_INSTANCE_ID, and lists only
-  # the foundry-stop commands sent to it.
+  # function asks only about the host in FOUNDRY_INSTANCE_ID, and reads only
+  # the stop whose command ID it recorded on the host's tags. It never lists
+  # commands: ssm:ListCommands would show every command sent in the account,
+  # with its parameters.
   statement {
     sid = "ObserveHost"
     actions = [
       "ec2:DescribeInstances",
       "ssm:DescribeInstanceInformation",
-      "ssm:ListCommands",
+      "ssm:GetCommandInvocation",
     ]
     resources = ["*"]
   }
@@ -147,6 +153,27 @@ data "aws_iam_policy_document" "controller" {
       aws_instance.host.arn,
       local.stop_document_arn,
     ]
+  }
+
+  # The stop's command ID and time go on the host's own tags, so the status
+  # can follow it with GetCommandInvocation. Only those two tags, and only on
+  # the host.
+  statement {
+    sid       = "RecordStopOnHost"
+    actions   = ["ec2:CreateTags"]
+    resources = [aws_instance.host.arn]
+
+    condition {
+      test     = "ForAllValues:StringEquals"
+      variable = "aws:TagKeys"
+      values   = local.stop_tag_keys
+    }
+
+    condition {
+      test     = "Null"
+      variable = "aws:TagKeys"
+      values   = ["false"]
+    }
   }
 }
 

@@ -14,4 +14,10 @@ provider "aws" {
       project = "foundry"
     }
   }
+
+  # The controller writes these on the host when it sends a stop
+  # (controller.tf); they are its record, not configuration.
+  ignore_tags {
+    keys = local.stop_tag_keys
+  }
 }

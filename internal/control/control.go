@@ -7,9 +7,12 @@ package control
 import (
 	"context"
 	"errors"
+	"fmt"
+	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/ec2"
+	ec2types "github.com/aws/aws-sdk-go-v2/service/ec2/types"
 	"github.com/aws/aws-sdk-go-v2/service/ssm"
 	"github.com/aws/smithy-go"
 
@@ -31,10 +34,14 @@ var (
 	// ErrAgentOffline means Systems Manager has no connected agent on the
 	// host to send the stop to, for example right after it booted.
 	ErrAgentOffline = errors.New("the host's Systems Manager agent is not connected")
+	// ErrStopNotRecorded means the stop was sent, but its record could not
+	// be written to the host's tags, so the status can't follow it.
+	ErrStopNotRecorded = errors.New("the stop was sent but not recorded on the host")
 )
 
-type EC2Starter interface {
+type EC2Changer interface {
 	StartInstances(context.Context, *ec2.StartInstancesInput, ...func(*ec2.Options)) (*ec2.StartInstancesOutput, error)
+	CreateTags(context.Context, *ec2.CreateTagsInput, ...func(*ec2.Options)) (*ec2.CreateTagsOutput, error)
 }
 
 type CommandSender interface {
@@ -45,8 +52,10 @@ type CommandSender interface {
 // function's configuration, never from a request.
 type Service struct {
 	InstanceID string
-	EC2        EC2Starter
+	EC2        EC2Changer
 	SSM        CommandSender
+	// Now is the clock a stop's time is read from; nil means time.Now.
+	Now func() time.Time
 }
 
 // Start asks EC2 to start the host and returns the state EC2 reports for it
@@ -67,10 +76,12 @@ func (s *Service) Start(ctx context.Context) (string, error) {
 	return string(output.StartingInstances[0].CurrentState.Name), nil
 }
 
-// Stop sends the stop document to the host and returns the command's ID. The
-// document takes no parameters, so nothing here can change what runs. It is
-// sent once: SendCommand has no idempotency token, so a retry after an answer
-// that was lost could send a second stop.
+// Stop sends the stop document to the host, records it on the host's tags
+// for the status to follow, and returns the command's ID. The document takes
+// no parameters, so nothing here can change what runs. It is sent once:
+// SendCommand has no idempotency token, so a retry after an answer that was
+// lost could send a second stop. When only the record fails, the ID comes
+// back with ErrStopNotRecorded: the stop is under way regardless.
 func (s *Service) Stop(ctx context.Context) (string, error) {
 	ctx, cancel := context.WithTimeout(ctx, status.ProviderTimeout)
 	defer cancel()
@@ -90,7 +101,25 @@ func (s *Service) Stop(ctx context.Context) (string, error) {
 	if output == nil || output.Command == nil || aws.ToString(output.Command.CommandId) == "" {
 		return "", errors.New("Systems Manager answered the stop with an unexpected record")
 	}
-	return aws.ToString(output.Command.CommandId), nil
+	command := aws.ToString(output.Command.CommandId)
+	_, err = s.EC2.CreateTags(ctx, &ec2.CreateTagsInput{
+		Resources: []string{s.InstanceID},
+		Tags: []ec2types.Tag{
+			{Key: aws.String(status.StopCommandTag), Value: aws.String(command)},
+			{Key: aws.String(status.StopRequestedTag), Value: aws.String(s.now().UTC().Format(time.RFC3339))},
+		},
+	})
+	if err != nil {
+		return command, fmt.Errorf("%w: %w", ErrStopNotRecorded, err)
+	}
+	return command, nil
+}
+
+func (s *Service) now() time.Time {
+	if s.Now != nil {
+		return s.Now()
+	}
+	return time.Now()
 }
 
 func code(err error) string {
