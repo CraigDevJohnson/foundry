@@ -1,3 +1,8 @@
+// Package status observes the Foundry host: EC2's lifecycle state, the
+// Systems Manager agent's connectivity and whether Foundry's join page
+// answers. It reports what it saw, with a fixed reason for each result, and
+// never guesses. The HTTP interface (internal/api) turns a Report into the
+// answer The Lobby shows.
 package status
 
 import (
@@ -13,6 +18,9 @@ import (
 	"github.com/aws/smithy-go"
 )
 
+// ProviderTimeout bounds each EC2 and SSM call and the HTTPS probe.
+const ProviderTimeout = 3 * time.Second
+
 type EC2Reader interface {
 	DescribeInstances(context.Context, *ec2.DescribeInstancesInput, ...func(*ec2.Options)) (*ec2.DescribeInstancesOutput, error)
 }
@@ -25,14 +33,52 @@ type HTTPSProber interface {
 	Probe(context.Context, string) HTTPSObservation
 }
 
+// Observation is one component's state and the fixed reason for it.
+type Observation struct {
+	State  string
+	Reason string
+}
+
+// HostObservation is EC2's view of the instance. LaunchTime is when EC2 last
+// started it, which EC2 resets on every start; it is zero when EC2 gave none.
+type HostObservation struct {
+	Observation
+	LaunchTime time.Time
+}
+
+type SSMObservation struct {
+	Observation
+	LastPingAt *time.Time
+}
+
+type HTTPSObservation struct {
+	Observation
+	HTTPStatus int
+}
+
+// Report is one observation of the host, its agent and Foundry's join page.
+// The three are taken during one call, not as an atomic snapshot. ObservedAt
+// is when the observation finished.
+type Report struct {
+	Host       HostObservation
+	SSM        SSMObservation
+	HTTPS      HTTPSObservation
+	ObservedAt time.Time
+}
+
 type Service struct {
 	Config Config
 	EC2    EC2Reader
 	SSM    SSMReader
 	HTTPS  HTTPSProber
+	// Now is the clock ObservedAt is read from; nil means time.Now.
+	Now func() time.Time
 }
 
-func (s *Service) Observe(ctx context.Context, requestID string) Response {
+// Observe reads the host first. Only a running host has its agent and join
+// page checked, independently of each other. Each call has ProviderTimeout,
+// shortened by any deadline on ctx.
+func (s *Service) Observe(ctx context.Context) Report {
 	host := s.host(ctx)
 	ssmObservation := SSMObservation{Observation: Observation{State: "not_checked", Reason: "host_not_running"}}
 	https := HTTPSObservation{Observation: Observation{State: "not_checked", Reason: "host_not_running"}}
@@ -52,46 +98,61 @@ func (s *Service) Observe(ctx context.Context, requestID string) Response {
 		}()
 		pending.Wait()
 	}
-	return Response{Version: 1, Kind: "status", RequestID: requestID, ObservedAt: time.Now().UTC(), Host: &host, SSM: &ssmObservation, HTTPS: &https}
+	return Report{Host: host, SSM: ssmObservation, HTTPS: https, ObservedAt: s.now().UTC()}
 }
 
-func (s *Service) host(ctx context.Context) Observation {
+func (s *Service) now() time.Time {
+	if s.Now != nil {
+		return s.Now()
+	}
+	return time.Now()
+}
+
+func (s *Service) host(ctx context.Context) HostObservation {
 	ctx, cancel := context.WithTimeout(ctx, ProviderTimeout)
 	defer cancel()
 	output, err := s.EC2.DescribeInstances(ctx, &ec2.DescribeInstancesInput{InstanceIds: []string{s.Config.InstanceID}})
 	if err != nil {
 		var apiError smithy.APIError
 		if errors.As(err, &apiError) && apiError.ErrorCode() == "InvalidInstanceID.NotFound" {
-			return Observation{State: "not_found", Reason: "no_record"}
+			return hostObservation("not_found", "no_record")
 		}
-		return Observation{State: "unknown", Reason: providerReason(err)}
+		return hostObservation("unknown", providerReason(err))
 	}
 	if output == nil || aws.ToString(output.NextToken) != "" {
-		return Observation{State: "unknown", Reason: "unexpected_record"}
+		return hostObservation("unknown", "unexpected_record")
 	}
 	count := 0
 	var state string
+	var launched time.Time
 	for _, reservation := range output.Reservations {
 		for _, instance := range reservation.Instances {
 			count++
 			if aws.ToString(instance.InstanceId) != s.Config.InstanceID || instance.State == nil {
-				return Observation{State: "unknown", Reason: "unexpected_record"}
+				return hostObservation("unknown", "unexpected_record")
 			}
 			state = string(instance.State.Name)
+			launched = aws.ToTime(instance.LaunchTime).UTC()
 		}
 	}
 	if count == 0 {
-		return Observation{State: "not_found", Reason: "no_record"}
+		return hostObservation("not_found", "no_record")
 	}
 	if count != 1 {
-		return Observation{State: "unknown", Reason: "unexpected_record"}
+		return hostObservation("unknown", "unexpected_record")
 	}
 	switch state {
 	case "pending", "running", "shutting-down", "terminated", "stopping", "stopped":
-		return Observation{State: state, Reason: "observed"}
+		result := hostObservation(state, "observed")
+		result.LaunchTime = launched
+		return result
 	default:
-		return Observation{State: "unknown", Reason: "unexpected_state"}
+		return hostObservation("unknown", "unexpected_state")
 	}
+}
+
+func hostObservation(state, reason string) HostObservation {
+	return HostObservation{Observation: Observation{State: state, Reason: reason}}
 }
 
 func (s *Service) agent(ctx context.Context) SSMObservation {

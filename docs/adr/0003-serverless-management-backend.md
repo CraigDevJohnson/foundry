@@ -10,6 +10,10 @@ status: accepted
 > governance-locked AWS Backup vaults described below. The controller direction
 > stands.
 
+> **Invocation superseded on 2026-10-13** by [ADR 0005](0005-the-lobby-calls-the-controller-through-a-function-url.md):
+> The Lobby's site, not the portfolio, calls the controller, with signed
+> requests to an `AWS_IAM` Function URL instead of a server-side Lambda invoke.
+
 Use a privately invoked Go Lambda controller and Systems Manager Automation
 runbooks, with Terraform defining the infrastructure and service setup. This
 fits the portfolio's existing Go and AWS integration and keeps management

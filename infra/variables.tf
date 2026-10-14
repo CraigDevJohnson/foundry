@@ -12,3 +12,16 @@ variable "ami_id" {
     error_message = "ami_id must be an AMI ID such as ami-0123456789abcdef0."
   }
 }
+
+# Relative to infra/, the working directory of `tofu -chdir=infra`. Run
+# `task build` before a plan; a plan without the zip fails.
+variable "controller_package_path" {
+  description = "The controller's Lambda zip as `task build` writes it: one static arm64 binary named bootstrap."
+  type        = string
+  default     = "../dist/bootstrap.zip"
+
+  validation {
+    condition     = endswith(var.controller_package_path, ".zip")
+    error_message = "controller_package_path must name the zip `task build` writes, such as ../dist/bootstrap.zip."
+  }
+}

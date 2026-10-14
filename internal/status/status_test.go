@@ -16,6 +16,11 @@ import (
 
 const testInstanceID = "i-0123456789abcdef0"
 
+var (
+	testNow    = time.Date(2026, 10, 13, 18, 3, 12, 0, time.UTC)
+	testLaunch = time.Date(2026, 10, 13, 11, 0, 0, 0, time.FixedZone("local", -7*3600))
+)
+
 type ec2Func func(context.Context, *ec2.DescribeInstancesInput) (*ec2.DescribeInstancesOutput, error)
 
 func (f ec2Func) DescribeInstances(ctx context.Context, in *ec2.DescribeInstancesInput, _ ...func(*ec2.Options)) (*ec2.DescribeInstancesOutput, error) {
@@ -33,7 +38,11 @@ type probeFunc func(context.Context, string) HTTPSObservation
 func (f probeFunc) Probe(ctx context.Context, url string) HTTPSObservation { return f(ctx, url) }
 
 func hostOutput(state string) *ec2.DescribeInstancesOutput {
-	return &ec2.DescribeInstancesOutput{Reservations: []ec2types.Reservation{{Instances: []ec2types.Instance{{InstanceId: aws.String(testInstanceID), State: &ec2types.InstanceState{Name: ec2types.InstanceStateName(state)}}}}}}
+	return &ec2.DescribeInstancesOutput{Reservations: []ec2types.Reservation{{Instances: []ec2types.Instance{{
+		InstanceId: aws.String(testInstanceID),
+		State:      &ec2types.InstanceState{Name: ec2types.InstanceStateName(state)},
+		LaunchTime: aws.Time(testLaunch),
+	}}}}}
 }
 func agentOutput(state string) *ssm.DescribeInstanceInformationOutput {
 	return &ssm.DescribeInstanceInformationOutput{InstanceInformationList: []ssmtypes.InstanceInformation{{InstanceId: aws.String(testInstanceID), PingStatus: ssmtypes.PingStatus(state)}}}
@@ -63,6 +72,7 @@ func testService(t *testing.T) *Service {
 			checkDeadline(t, ctx)
 			return HTTPSObservation{Observation: Observation{State: "responding", Reason: "observed"}, HTTPStatus: 200}
 		}),
+		Now: func() time.Time { return testNow },
 	}
 }
 func checkDeadline(t *testing.T, ctx context.Context) {
@@ -90,14 +100,54 @@ func TestNativeHostStatesAndDependentProbes(t *testing.T) {
 					return HTTPSObservation{}
 				})
 			}
-			response := s.Observe(context.Background(), testRequestID)
-			if response.Host.State != state || response.Host.Reason != "observed" {
-				t.Fatalf("host=%+v", response.Host)
+			report := s.Observe(context.Background())
+			if report.Host.State != state || report.Host.Reason != "observed" {
+				t.Fatalf("host=%+v", report.Host)
 			}
-			if state != "running" && (response.SSM.State != "not_checked" || response.SSM.Reason != "host_not_running" || response.HTTPS.State != "not_checked" || response.HTTPS.Reason != "host_not_running") {
-				t.Fatalf("probes: %+v %+v", response.SSM, response.HTTPS)
+			if !report.Host.LaunchTime.Equal(testLaunch) || report.Host.LaunchTime.Location() != time.UTC {
+				t.Fatalf("launch time=%v", report.Host.LaunchTime)
+			}
+			if state != "running" && (report.SSM.State != "not_checked" || report.SSM.Reason != "host_not_running" || report.HTTPS.State != "not_checked" || report.HTTPS.Reason != "host_not_running") {
+				t.Fatalf("probes: %+v %+v", report.SSM, report.HTTPS)
 			}
 		})
+	}
+}
+
+func TestMissingLaunchTimeStaysMissing(t *testing.T) {
+	s := testService(t)
+	output := hostOutput("running")
+	output.Reservations[0].Instances[0].LaunchTime = nil
+	s.EC2 = ec2Func(func(context.Context, *ec2.DescribeInstancesInput) (*ec2.DescribeInstancesOutput, error) {
+		return output, nil
+	})
+	if report := s.Observe(context.Background()); report.Host.State != "running" || !report.Host.LaunchTime.IsZero() {
+		t.Fatalf("host=%+v", report.Host)
+	}
+}
+
+func TestObservedAtIsWhenTheObservationFinished(t *testing.T) {
+	s := testService(t)
+	finished := false
+	s.HTTPS = probeFunc(func(context.Context, string) HTTPSObservation {
+		finished = true
+		return HTTPSObservation{Observation: Observation{State: "responding", Reason: "observed"}, HTTPStatus: 200}
+	})
+	local := time.Date(2026, 10, 13, 11, 3, 12, 0, time.FixedZone("local", -7*3600))
+	s.Now = func() time.Time {
+		if !finished {
+			t.Error("clock read before the probes finished")
+		}
+		return local
+	}
+	report := s.Observe(context.Background())
+	if !report.ObservedAt.Equal(local) || report.ObservedAt.Location() != time.UTC {
+		t.Fatalf("observed at %v", report.ObservedAt)
+	}
+	s.Now = nil
+	before := time.Now()
+	if report := s.Observe(context.Background()); report.ObservedAt.Before(before) || report.ObservedAt.After(time.Now()) {
+		t.Fatalf("default clock gave %v", report.ObservedAt)
 	}
 }
 
@@ -143,8 +193,8 @@ func TestUncertainHostRecords(t *testing.T) {
 				t.Error("HTTPS called for uncertain/absent host")
 				return HTTPSObservation{}
 			})
-			r := s.Observe(context.Background(), testRequestID)
-			if r.Host.State != test.state || r.Host.Reason != test.reason {
+			r := s.Observe(context.Background())
+			if r.Host.State != test.state || r.Host.Reason != test.reason || !r.Host.LaunchTime.IsZero() {
 				t.Fatalf("host=%+v", r.Host)
 			}
 			if r.SSM.State != "not_checked" || r.HTTPS.State != "not_checked" {
@@ -191,7 +241,7 @@ func TestSSMRecordsRemainIndependentFromHTTPS(t *testing.T) {
 			s.SSM = ssmFunc(func(context.Context, *ssm.DescribeInstanceInformationInput) (*ssm.DescribeInstanceInformationOutput, error) {
 				return test.output, test.err
 			})
-			r := s.Observe(context.Background(), testRequestID)
+			r := s.Observe(context.Background())
 			if r.SSM.State != test.state || r.SSM.Reason != test.reason || r.HTTPS.State != "responding" {
 				t.Fatalf("SSM=%+v HTTPS=%+v", r.SSM, r.HTTPS)
 			}
@@ -227,7 +277,7 @@ func TestIndependentProbesAndCallerDeadline(t *testing.T) {
 		close(httpStarted)
 		return HTTPSObservation{Observation: Observation{State: "responding", Reason: "observed"}, HTTPStatus: 200}
 	})
-	r := s.Observe(ctx, testRequestID)
+	r := s.Observe(ctx)
 	if r.SSM.State != "unknown" || r.SSM.Reason != "timeout" || r.HTTPS.State != "responding" {
 		t.Fatalf("SSM=%+v HTTPS=%+v", r.SSM, r.HTTPS)
 	}

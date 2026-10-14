@@ -1,5 +1,5 @@
-# IDs the runbook steps need (docs/operations.md, infra/README.md). None are
-# secret.
+# IDs the runbook steps need (docs/operations.md, infra/README.md) and the
+# controller addresses The Lobby's site takes. None are secret.
 
 output "host_instance_id" {
   description = "The Foundry host instance."
@@ -34,4 +34,14 @@ output "security_group_id" {
 output "host_control_role_arn" {
   description = "The role the Host control workflow assumes (GitHub variable AWS_HOST_CONTROL_ROLE_ARN)."
   value       = aws_iam_role.host_control.arn
+}
+
+output "controller_urls" {
+  description = "Per Lobby site environment, the controller's Function URL: what the-lobby's foundry_backend_url takes for that environment."
+  value       = { for environment, url in aws_lambda_function_url.controller : environment => url.function_url }
+}
+
+output "controller_function_arns" {
+  description = "Per Lobby site environment, the function behind controller_urls: what the-lobby's foundry_backend_function_arn takes for that environment."
+  value       = { for environment, function in aws_lambda_function.controller : environment => function.arn }
 }

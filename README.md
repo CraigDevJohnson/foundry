@@ -5,10 +5,11 @@ application and the AWS EC2 instance that runs it.
 
 This repository will own the tools for operating that installation. The first
 release serves Craig as its sole operator and supports a game with at most five
-concurrent users. The portfolio provides the management interface; this
-repository owns the Foundry backend, operations, and reproducible host and
-service setup. The operating policy and backend architecture were confirmed
-through the design interview on 2026-09-08.
+concurrent users. The Lobby (craigdevjohnson.com) provides the management
+interface on its `/foundry` page; this repository owns the Foundry backend,
+operations, and reproducible host and service setup. The operating policy and
+backend architecture were confirmed through the design interview on
+2026-09-08.
 
 ## Agreed first-release scope
 
@@ -71,15 +72,19 @@ management plane is relied upon.
 - [First-release specification](https://github.com/CraigDevJohnson/foundry/issues/2)
   contains the consolidated scope, acceptance checks, and adoption prerequisites.
 - [Portfolio and Foundry responsibilities](docs/adr/0001-portfolio-and-foundry-responsibilities.md)
-  records the management boundary.
+  records the management boundary. Its portfolio interface is superseded by
+  [The Lobby calls the controller through a Function URL](docs/adr/0005-the-lobby-calls-the-controller-through-a-function-url.md).
 - [Session-based recovery](docs/adr/0002-session-based-recovery.md) and
   [Session archive protection](docs/adr/0004-session-archive-protection.md)
   are superseded by aws-design §6.2 and §9.3 and kept as history.
 - [Infrastructure](infra/README.md) describes the OpenTofu root that builds the
-  host, its state and how to rebuild the host.
+  host and the controller, its state, how to rebuild the host and how to
+  deploy the controller.
 - [Backend architecture](docs/adr/0003-serverless-management-backend.md) records
   the accepted Go Lambda and Systems Manager implementation direction.
-- [Status API](docs/status-api.md) documents the first read-only backend slice.
+- [Status API](docs/status-api.md) documents the controller's HTTP interface:
+  the read-only `GET /server` that The Lobby's site serves at
+  `/api/foundry/server` for its `/foundry` page, which is not built yet.
 
 ## Development
 
@@ -95,17 +100,21 @@ The example manifest intentionally has unresolved host-specific pins. Read the
 host contract before rendering a private installation tree. Rendering never
 installs files or contacts the host.
 
-The first implementation slice provides a Go Lambda status controller and a
-local read-only runner. It reports host, agent, and HTTPS observations. Local
-recovery-set capture/validation/materialization is now available for offline testing;
-cloud backups, session operations, live recovery, infrastructure and portfolio
-integration
-remain tracked in the [first-release backlog](https://github.com/CraigDevJohnson/foundry/issues/2).
+The controller is a Go HTTP server that reports the host's status to The
+Lobby. On Lambda it serves the site through an `AWS_IAM` Function URL, one
+function per Lobby site environment ([ADR 0005](docs/adr/0005-the-lobby-calls-the-controller-through-a-function-url.md),
+[infra/controller.tf](infra/controller.tf)); `task run` serves it on your
+computer with your AWS read credentials. It reads EC2, the Systems Manager
+agent and Foundry's join page, and changes nothing. Local recovery-set
+capture/validation/materialization is now available for offline testing;
+cloud backups, session operations and live recovery remain tracked in the
+[first-release backlog](https://github.com/CraigDevJohnson/foundry/issues/2).
 
 Use Go 1.27.2 or newer and [Task](https://taskfile.dev) 3.x, and run `task ci`
 for formatting, vet, race-enabled tests, a Linux ARM64 Lambda build, and
-vulnerability checks. `task build` produces `dist/bootstrap.zip`. See the [status reference](docs/status-api.md) for required
-configuration and local invocation.
+vulnerability checks. `task build` produces `dist/bootstrap.zip`, the same
+zip for the same source. See the [status reference](docs/status-api.md) for
+its configuration and for running it locally.
 
 The OpenTofu root in `infra/` uses OpenTofu 1.12.x. CI runs `tofu fmt -check`
 and `tofu validate` on it without AWS credentials. Read

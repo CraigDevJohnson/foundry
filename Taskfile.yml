@@ -53,9 +53,33 @@ tasks:
     desc: Build the Linux ARM64 Lambda bootstrap and its zip in dist/
     cmds:
       - mkdir -p dist
-      - "CGO_ENABLED=0 GOOS=linux GOARCH=arm64 {{.GO}} build -tags lambda.norpc -trimpath -ldflags='-s -w' -o dist/bootstrap ./cmd/lambda"
-      - rm -f dist/bootstrap.zip
-      - cd dist && zip -q -X bootstrap.zip bootstrap
+      - "CGO_ENABLED=0 GOOS=linux GOARCH=arm64 {{.GO}} build -tags lambda.norpc -trimpath -buildvcs=false -ldflags='-s -w' -o dist/bootstrap ./cmd/lambda"
+      # The same source gives the same zip, so a plan with no code change
+      # reports no change to the controller (infra/controller.tf hashes the
+      # zip): the binary carries no build path or commit (-trimpath,
+      # -buildvcs=false), and the archive carries a fixed mode and time and no
+      # extra fields (-X) instead of this build's.
+      - cd dist && chmod 0755 bootstrap && TZ=UTC touch -t 198001010000 bootstrap && rm -f bootstrap.zip && TZ=UTC zip -q -X bootstrap.zip bootstrap
+
+  run:
+    desc: Serve the controller at http://127.0.0.1:8083 with your AWS read credentials
+    summary: |
+      Serve the controller's HTTP interface (docs/status-api.md) on this
+      computer, to ask it directly with curl:
+
+        AWS_PROFILE=workloads-readonly task run
+
+      It reads the host with the credentials in the environment and changes
+      nothing. FOUNDRY_AWS_REGION, FOUNDRY_INSTANCE_ID and FOUNDRY_HTTPS_URL
+      default to us-west-2, the host found by its tags (as host:status finds
+      it) and the join page; set any of them to override it. FOUNDRY_ADDR
+      changes the address.
+    cmds:
+      - |
+        FOUNDRY_AWS_REGION="${FOUNDRY_AWS_REGION:-{{.AWS_REGION}}}" \
+        FOUNDRY_HTTPS_URL="${FOUNDRY_HTTPS_URL:-{{.FOUNDRY_URL}}/join}" \
+        FOUNDRY_INSTANCE_ID="${FOUNDRY_INSTANCE_ID:-$({{.FIND_HOST}})}" \
+        {{.GO}} run ./cmd/lambda
 
   vuln:
     desc: Scan the Lambda binary with govulncheck

@@ -50,6 +50,37 @@ mock_provider "aws" {
       arn = "arn:aws:iam::793680745829:oidc-provider/token.actions.githubusercontent.com"
     }
   }
+
+  mock_resource "aws_instance" {
+    defaults = {
+      id  = "i-0123456789abcdef0"
+      arn = "arn:aws:ec2:us-west-2:793680745829:instance/i-0123456789abcdef0"
+    }
+  }
+
+  mock_resource "aws_cloudwatch_log_group" {
+    defaults = {
+      arn = "arn:aws:logs:us-west-2:793680745829:log-group:/aws/lambda/foundry-mock-controller"
+    }
+  }
+
+  mock_resource "aws_lambda_function" {
+    defaults = {
+      arn = "arn:aws:lambda:us-west-2:793680745829:function:foundry-mock-controller"
+    }
+  }
+
+  mock_resource "aws_lambda_function_url" {
+    defaults = {
+      function_url = "https://mock.lambda-url.us-west-2.on.aws/"
+    }
+  }
+}
+
+# The controller's zip comes from `task build`, which the offline checks don't
+# run. The fixture stands in for it.
+variables {
+  controller_package_path = "tests/fixtures/bootstrap.zip"
 }
 
 run "state_bucket_is_tls_only" {
@@ -318,4 +349,227 @@ run "host_control_role_trusts_only_the_environment" {
     )
     error_message = "foundry-shutdown must be a Command document with no parameters."
   }
+}
+
+# --- The Lobby's controller ---
+
+run "controller_names_carry_the_site_environment" {
+  command = plan
+
+  assert {
+    condition = alltrue([
+      for environment in ["dev", "prod"] : (
+        aws_lambda_function.controller[environment].function_name == "foundry-${environment}-controller" &&
+        aws_iam_role.controller[environment].name == "foundry-${environment}-controller" &&
+        aws_cloudwatch_log_group.controller[environment].name == "/aws/lambda/foundry-${environment}-controller" &&
+        aws_cloudwatch_metric_alarm.controller_failing[environment].alarm_name == "foundry-${environment}-controller-failing"
+      )
+    ]) && length(aws_lambda_function.controller) == 2
+    error_message = "There is one controller per Lobby site environment, dev and prod, named foundry-<env>-controller, because the site's boundary lets site-<env>-server call only *-<env>-*."
+  }
+
+  assert {
+    condition = alltrue([
+      for f in aws_lambda_function.controller : (
+        f.runtime == "provided.al2023" &&
+        f.architectures == tolist(["arm64"]) &&
+        f.handler == "bootstrap" &&
+        f.memory_size == 256 &&
+        f.timeout == 10
+      )
+    ])
+    error_message = "The zip from `task build` is one static arm64 binary named bootstrap for provided.al2023, with 256 MB and a 10 second timeout."
+  }
+
+  assert {
+    condition = alltrue([
+      for environment in ["dev", "prod"] : (
+        aws_cloudwatch_log_group.controller[environment].retention_in_days == 30 &&
+        aws_lambda_function.controller[environment].logging_config[0].log_group == "/aws/lambda/foundry-${environment}-controller"
+      )
+    ])
+    error_message = "Each controller logs to its own log group, kept 30 days (G8)."
+  }
+}
+
+run "only_each_environments_site_role_may_call_its_controller" {
+  command = plan
+
+  assert {
+    condition     = alltrue([for u in aws_lambda_function_url.controller : u.authorization_type == "AWS_IAM"])
+    error_message = "Each Function URL must require a signed request."
+  }
+
+  assert {
+    condition = alltrue([
+      for environment in ["dev", "prod"] : (
+        aws_lambda_permission.controller_site_url[environment].function_name == "foundry-${environment}-controller" &&
+        aws_lambda_permission.controller_site_url[environment].principal == "arn:aws:iam::793680745829:role/site-${environment}-server" &&
+        aws_lambda_permission.controller_site_url[environment].action == "lambda:InvokeFunctionUrl" &&
+        aws_lambda_permission.controller_site_url[environment].function_url_auth_type == "AWS_IAM"
+      )
+    ]) && length(aws_lambda_permission.controller_site_url) == 2
+    error_message = "lambda:InvokeFunctionUrl on each controller goes to that environment's site role alone."
+  }
+
+  assert {
+    condition = alltrue([
+      for environment in ["dev", "prod"] : (
+        aws_lambda_permission.controller_site_invoke[environment].function_name == "foundry-${environment}-controller" &&
+        aws_lambda_permission.controller_site_invoke[environment].principal == "arn:aws:iam::793680745829:role/site-${environment}-server" &&
+        aws_lambda_permission.controller_site_invoke[environment].action == "lambda:InvokeFunction" &&
+        aws_lambda_permission.controller_site_invoke[environment].invoked_via_function_url == true
+      )
+    ]) && length(aws_lambda_permission.controller_site_invoke) == 2
+    error_message = "lambda:InvokeFunction on each controller goes to that environment's site role alone, and only through the URL."
+  }
+}
+
+run "controller_role_only_reads_and_writes_its_own_logs" {
+  command = plan
+
+  assert {
+    condition = alltrue([
+      for d in data.aws_iam_policy_document.controller :
+      toset(flatten([for s in d.statement : tolist(s.actions)])) == toset([
+        "logs:CreateLogStream",
+        "logs:PutLogEvents",
+        "ec2:DescribeInstances",
+        "ssm:DescribeInstanceInformation",
+      ]) && length(d.statement) == 2
+    ])
+    error_message = "The controller role grants exactly its log writes, ec2:DescribeInstances and ssm:DescribeInstanceInformation: no start, stop, SendCommand or parameter reads."
+  }
+
+  assert {
+    condition = alltrue([
+      for environment in ["dev", "prod"] : alltrue([
+        for s in data.aws_iam_policy_document.controller[environment].statement :
+        s.resources == toset(["arn:aws:logs:us-west-2:793680745829:log-group:/aws/lambda/foundry-${environment}-controller:*"])
+        if anytrue([for a in s.actions : startswith(a, "logs:")])
+      ])
+    ])
+    error_message = "Each controller may write only its own log group's streams."
+  }
+
+  assert {
+    condition = alltrue(flatten([
+      for d in data.aws_iam_policy_document.controller : [
+        for s in d.statement :
+        s.actions == toset(["ec2:DescribeInstances", "ssm:DescribeInstanceInformation"]) if contains(tolist(s.resources), "*")
+      ]
+    ]))
+    error_message = "Only the describe actions, which have no resource-level permissions, may use a * resource."
+  }
+
+  assert {
+    condition = (
+      one(data.aws_iam_policy_document.controller_trust.statement[0].principals).identifiers == toset(["lambda.amazonaws.com"]) &&
+      length(data.aws_iam_policy_document.controller_trust.statement) == 1
+    )
+    error_message = "Only Lambda may assume the controller role."
+  }
+
+  assert {
+    condition = alltrue([
+      for environment in ["dev", "prod"] : (
+        toset(aws_iam_role_policies_exclusive.controller[environment].policy_names) == toset(["foundry-${environment}-controller"]) &&
+        length(aws_iam_role_policy_attachments_exclusive.controller[environment].policy_arns) == 0 &&
+        aws_iam_role_policy.controller[environment].role == aws_iam_role.controller[environment].id
+      )
+    ])
+    error_message = "Each controller role keeps only its own inline policy and no managed policies."
+  }
+}
+
+run "controller_watches_the_host" {
+  command = plan
+
+  assert {
+    condition = alltrue([
+      for f in aws_lambda_function.controller :
+      f.environment[0].variables == tomap({
+        FOUNDRY_AWS_REGION  = "us-west-2"
+        FOUNDRY_INSTANCE_ID = "i-0123456789abcdef0"
+        FOUNDRY_HTTPS_URL   = "https://foundry.craigdevjohnson.com:30000/join"
+      })
+    ])
+    error_message = "The controller gets the Region, the host's instance ID and Foundry's /join page, and nothing else."
+  }
+
+  assert {
+    condition     = alltrue([for f in aws_lambda_function.controller : f.environment[0].variables["FOUNDRY_INSTANCE_ID"] == aws_instance.host.id])
+    error_message = "FOUNDRY_INSTANCE_ID must follow aws_instance.host, so a rebuild updates it."
+  }
+
+  assert {
+    condition     = alltrue([for f in aws_lambda_function.controller : f.source_code_hash == filebase64sha256("tests/fixtures/bootstrap.zip")])
+    error_message = "The function's hash comes from controller_package_path, so a new build redeploys it."
+  }
+}
+
+run "controller_alarm_targets_workloads_alerts" {
+  command = plan
+
+  assert {
+    condition = alltrue([
+      for environment in ["dev", "prod"] : (
+        aws_cloudwatch_metric_alarm.controller_failing[environment].namespace == "AWS/Lambda" &&
+        aws_cloudwatch_metric_alarm.controller_failing[environment].metric_name == "Errors" &&
+        aws_cloudwatch_metric_alarm.controller_failing[environment].dimensions["FunctionName"] == "foundry-${environment}-controller" &&
+        aws_cloudwatch_metric_alarm.controller_failing[environment].statistic == "Sum" &&
+        aws_cloudwatch_metric_alarm.controller_failing[environment].period == 300 &&
+        aws_cloudwatch_metric_alarm.controller_failing[environment].evaluation_periods == 1 &&
+        aws_cloudwatch_metric_alarm.controller_failing[environment].threshold == 1 &&
+        aws_cloudwatch_metric_alarm.controller_failing[environment].comparison_operator == "GreaterThanOrEqualToThreshold" &&
+        aws_cloudwatch_metric_alarm.controller_failing[environment].treat_missing_data == "notBreaching"
+      )
+    ])
+    error_message = "Each controller's alarm fires on its first Lambda error in five minutes."
+  }
+
+  assert {
+    condition = alltrue([
+      for a in aws_cloudwatch_metric_alarm.controller_failing : (
+        a.alarm_actions == toset(["arn:aws:sns:us-west-2:793680745829:alerts"]) &&
+        a.ok_actions == toset(["arn:aws:sns:us-west-2:793680745829:alerts"])
+      )
+    ])
+    error_message = "The controller alarms notify the workloads alerts topic, and clear there too."
+  }
+}
+
+run "controller_outputs_are_keyed_by_site_environment" {
+  command = plan
+
+  assert {
+    condition = (
+      keys(output.controller_urls) == ["dev", "prod"] &&
+      keys(output.controller_function_arns) == ["dev", "prod"]
+    )
+    error_message = "controller_urls and controller_function_arns are keyed by Lobby site environment."
+  }
+
+  # The mock gives invoke_arn and qualified_arn other values than arn, so an
+  # output that takes the wrong attribute fails here.
+  assert {
+    condition = alltrue([
+      for environment in ["dev", "prod"] : (
+        output.controller_function_arns[environment] == aws_lambda_function.controller[environment].arn &&
+        output.controller_urls[environment] == aws_lambda_function_url.controller[environment].function_url
+      )
+    ])
+    error_message = "Each environment's outputs are that environment's function ARN (not invoke_arn or qualified_arn) and Function URL."
+  }
+}
+
+run "controller_package_must_be_a_zip" {
+  command = plan
+
+  variables {
+    # A file that exists, so only the validation fails.
+    controller_package_path = "tests/foundry.tftest.hcl"
+  }
+
+  expect_failures = [var.controller_package_path]
 }
