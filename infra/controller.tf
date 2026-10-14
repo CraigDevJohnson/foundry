@@ -1,8 +1,9 @@
-# The controller (ADR 0003, ADR 0005): the Go Lambda behind The Lobby's
-# /foundry page. It answers the site's signed requests through a Function URL
-# and only reads the host's state, so it changes nothing in AWS. One function
-# per Lobby site environment, and only that environment's site role may call
-# it (the-lobby ADR 0006).
+# The controller (ADR 0003, ADR 0005, ADR 0006): the Go Lambda behind The
+# Lobby's Foundry Tool. It answers the site's signed requests through a
+# Function URL: it reads the host's state, starts the host, and sends it the
+# foundry-stop document, which shuts Foundry down and powers the host off. One
+# function per Lobby site environment, and only that environment's site role
+# may call it (the-lobby ADR 0006).
 
 locals {
   # The Lobby's site environments. The site's permissions boundary lets
@@ -28,6 +29,43 @@ locals {
   # The page players open. The controller's HTTPS probe requires exactly
   # https://host[:port]/join and reports Foundry as responding only on a 200.
   foundry_join_url = "https://foundry.craigdevjohnson.com:30000/join"
+
+  # The stop runs the same clean shutdown as `task host:stop`, then powers the
+  # host off. The power-off is appended to the shutdown script, so it runs only
+  # if the script reaches its end.
+  shutdown_script = file("${path.module}/templates/foundry-shutdown.sh")
+  power_off       = file("${path.module}/templates/foundry-power-off.sh")
+}
+
+# Sent by the controller when The Lobby stops the host (ADR 0006). It has no
+# parameters, so SendCommand callers can't change what runs. A failure
+# anywhere leaves the host running, and the foundry-stop-failed rule alerts.
+resource "aws_ssm_document" "stop" {
+  name            = "foundry-stop"
+  document_type   = "Command"
+  document_format = "JSON"
+
+  content = jsonencode({
+    schemaVersion = "2.2"
+    description   = "Shut Foundry down with /foundry/stop_foundry.sh and systemd, then power the host off"
+    mainSteps = [{
+      action = "aws:runShellScript"
+      name   = "stopFoundryAndHost"
+      inputs = {
+        timeoutSeconds = "300"
+        runCommand     = [local.shutdown_script, local.power_off]
+      }
+    }]
+  })
+
+  lifecycle {
+    precondition {
+      # An early successful exit in the shutdown script would skip the
+      # power-off and leave the stop reported as done on a running host.
+      condition     = !can(regex("(?m)^[ \\t]*exit([ \\t]+0)?[ \\t]*(#.*)?$", local.shutdown_script))
+      error_message = "templates/foundry-shutdown.sh must not exit successfully before its end: the foundry-stop document appends the power-off to it."
+    }
+  }
 }
 
 resource "aws_cloudwatch_log_group" "controller" {
@@ -55,14 +93,15 @@ resource "aws_iam_role" "controller" {
   for_each = local.site_environments
 
   name                  = local.controller_names[each.key]
-  description           = "Foundry controller for The Lobby ${each.key} site - reads host status only"
+  description           = "Foundry controller for The Lobby ${each.key} site - host status, start and stop"
   assume_role_policy    = data.aws_iam_policy_document.controller_trust.json
   force_detach_policies = true
 }
 
-# Least privilege (G7): the function writes its own log group and reads the
-# host's state. It can't start, stop or run anything on the host; those stay
-# with the Host control role (ci.tf).
+# Least privilege (G7): the function writes its own log group, reads the
+# host's state, starts the host and sends it the parameterless foundry-stop
+# document. It can't stop the instance through EC2 or run anything else on the
+# host.
 data "aws_iam_policy_document" "controller" {
   for_each = local.site_environments
 
@@ -75,15 +114,33 @@ data "aws_iam_policy_document" "controller" {
     resources = ["arn:aws:logs:${local.region}:${local.workloads_account_id}:log-group:${local.controller_log_group_names[each.key]}:*"]
   }
 
-  # Neither action has resource-level permissions, so both need *. The
-  # function asks only about the host in FOUNDRY_INSTANCE_ID.
+  # None of these has resource-level permissions, so all need *. The
+  # function asks only about the host in FOUNDRY_INSTANCE_ID, and lists only
+  # the foundry-stop commands sent to it.
   statement {
     sid = "ObserveHost"
     actions = [
       "ec2:DescribeInstances",
       "ssm:DescribeInstanceInformation",
+      "ssm:ListCommands",
     ]
     resources = ["*"]
+  }
+
+  statement {
+    sid       = "StartHost"
+    actions   = ["ec2:StartInstances"]
+    resources = [aws_instance.host.arn]
+  }
+
+  # SendCommand needs both the target instance and the document.
+  statement {
+    sid     = "StopHost"
+    actions = ["ssm:SendCommand"]
+    resources = [
+      aws_instance.host.arn,
+      aws_ssm_document.stop.arn,
+    ]
   }
 }
 
@@ -115,7 +172,7 @@ resource "aws_lambda_function" "controller" {
   for_each = local.site_environments
 
   function_name = local.controller_names[each.key]
-  description   = "Foundry host status for The Lobby ${each.key} site - read only"
+  description   = "Foundry host status, start and stop for The Lobby ${each.key} site"
   role          = aws_iam_role.controller[each.key].arn
 
   # `task build` writes the same zip for the same source, so an unchanged
@@ -127,8 +184,8 @@ resource "aws_lambda_function" "controller" {
   architectures    = ["arm64"]
 
   memory_size = 256
-  # GET /server answers within 6 seconds and the site gives up at 7, so a
-  # longer run would only cost money.
+  # Every route answers within 6 seconds and the site gives up at 7, so a
+  # longer run would only cost money. A stop never waits for the host.
   timeout = 10
 
   environment {
@@ -137,6 +194,9 @@ resource "aws_lambda_function" "controller" {
       # A rebuild changes the instance ID; the next apply updates it here.
       FOUNDRY_INSTANCE_ID = aws_instance.host.id
       FOUNDRY_HTTPS_URL   = local.foundry_join_url
+      # Requests this role signed name the Member who asked for a start or
+      # stop, which the function logs.
+      FOUNDRY_SITE_ROLE_ARN = local.controller_site_role_arns[each.key]
     }
   }
 
@@ -202,4 +262,26 @@ resource "aws_cloudwatch_metric_alarm" "controller_failing" {
 
   alarm_actions = [local.alerts_topic_arn]
   ok_actions    = [local.alerts_topic_arn]
+}
+
+# A stop that fails, times out or is cancelled leaves the host running (ADR
+# 0006), so Systems Manager's status event for it notifies the workloads
+# us-west-2 alerts topic, whose policy lets EventBridge publish (aws-setup).
+resource "aws_cloudwatch_event_rule" "stop_failed" {
+  name        = "foundry-stop-failed"
+  description = "A Foundry stop from The Lobby failed - the host is still running. See docs/operations.md."
+  event_pattern = jsonencode({
+    source        = ["aws.ssm"]
+    "detail-type" = ["EC2 Command Status-change Notification"]
+    detail = {
+      "document-name" = [aws_ssm_document.stop.name]
+      status          = ["Failed", "TimedOut", "Cancelled"]
+    }
+  })
+}
+
+resource "aws_cloudwatch_event_target" "stop_failed" {
+  rule      = aws_cloudwatch_event_rule.stop_failed.name
+  target_id = "alerts"
+  arn       = local.alerts_topic_arn
 }

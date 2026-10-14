@@ -15,7 +15,7 @@ and §10. OpenTofu 1.12.x, AWS provider 6.x. Day-to-day operation of the host
 | `host.tf` | The workloads host: `foundry-host` role (SSM default instance policy, `ssm:GetParameter*` on `parameter/foundry` and `parameter/foundry/*` only, no KMS; exclusive lists for both managed and inline policies) and instance profile, the t4g.small instance (IMDSv2, no key pair, encrypted 10 GiB gp3 root), the 20 GiB `foundry-data` volume with `prevent_destroy`, the Elastic IP with `prevent_destroy`, and the `StatusCheckFailed` alarm to the workloads `alerts` topic (D18) |
 | `backups.tf` | The workloads `foundry-dlm` role and snapshot policy: both volumes tagged `project=foundry`, daily at 10:00 UTC keeping 7, weekly on Sunday at 11:00 UTC keeping 4 |
 | `ci.tf` | The `foundry-host-control-ci` role for the Host control workflow: trusts the workloads GitHub OIDC provider (owned by aws-setup) only for this repository's `foundry-host` environment, and may only describe instances, start and stop the host, and run the parameterless `foundry-shutdown` SSM document (`templates/foundry-shutdown.sh`) on it |
-| `controller.tf` | The controller The Lobby's `/foundry` page calls ([ADR 0005](../docs/adr/0005-the-lobby-calls-the-controller-through-a-function-url.md)), once per site environment: the `foundry-<env>-controller` Lambda (Go, provided.al2023, arm64) with its log group (30 days), its role (own log streams, `ec2:DescribeInstances` and `ssm:DescribeInstanceInformation` only; exclusive lists for both managed and inline policies), an `AWS_IAM` Function URL granted only to `site-<env>-server`, and the `foundry-<env>-controller-failing` alarm on Lambda errors to the workloads `alerts` topic. It reads the host's state and changes nothing |
+| `controller.tf` | The controller The Lobby's Foundry Tool calls ([ADR 0005](../docs/adr/0005-the-lobby-calls-the-controller-through-a-function-url.md), [ADR 0006](../docs/adr/0006-the-lobby-starts-and-stops-the-host.md)), once per site environment: the `foundry-<env>-controller` Lambda (Go, provided.al2023, arm64) with its log group (30 days), its role (own log streams; `ec2:DescribeInstances`, `ssm:DescribeInstanceInformation` and `ssm:ListCommands`; `ec2:StartInstances` on the host; `ssm:SendCommand` of `foundry-stop` to the host; exclusive lists for both managed and inline policies), an `AWS_IAM` Function URL granted only to `site-<env>-server`, and the `foundry-<env>-controller-failing` alarm on Lambda errors to the workloads `alerts` topic. Shared by both: the parameterless `foundry-stop` document (`templates/foundry-shutdown.sh`, then `templates/foundry-power-off.sh`) and the `foundry-stop-failed` EventBridge rule, which sends a failed, timed-out or cancelled stop to the same topic |
 | `templates/` | The `foundry-shutdown` script, first-boot user data (no secrets, never formats a disk) and the certbot deploy hook it installs |
 | `outputs.tf` | Instance, Elastic IP, root volume, data volume, Availability Zone and security group IDs for the runbook, the Host control role ARN, and the controller's URLs and function ARNs per site environment for the-lobby |
 | `variables.tf` | `ami_id` (AL2023 arm64; the instance ignores later changes). Change it only by committing a new default, never with `-var`, so every plan sees the same value. `controller_package_path`, the controller's zip, relative to `infra/` (default `../dist/bootstrap.zip`, which `task build` writes) |
@@ -50,7 +50,7 @@ profile.
 ## Deploying the controller
 
 `controller.tf` adds `foundry-dev-controller` and `foundry-prod-controller`,
-which answer The Lobby's `/foundry` page (the HTTP contract is in
+which answer The Lobby's Foundry Tool (the HTTP contract is in
 [status-api.md](../docs/status-api.md)). Each is granted only to its site's
 role, `site-dev-server` or `site-prod-server`. Both roles must already exist:
 Lambda refuses a grant to a role it can't find.
@@ -58,10 +58,13 @@ Lambda refuses a grant to a role it can't find.
 1. Build the zip from the repository root: `task build` writes
    `dist/bootstrap.zip`. The same source gives the same zip, so a later plan
    after an unchanged build shows no change to the functions.
-2. Plan as above. The first plan adds 20 resources, 10 per environment: the
+2. Plan as above. The first plan adds 23 resources: 10 per environment (the
    log group, the role, its inline policy, the two exclusive lists, the
-   function, its Function URL, the two grants to the site role and the alarm.
-   It changes nothing else.
+   function, its Function URL, the two grants to the site role and the alarm),
+   plus the `foundry-stop` document and the `foundry-stop-failed` rule and its
+   target. It should change nothing else. `aws_instance.host` now states
+   `instance_initiated_shutdown_behavior = "stop"`, EC2's default; if the plan
+   shows any change to the host, stop and look before applying.
 3. Apply only the saved plan Craig approved.
 4. Check each environment with signed requests. AWS lets the admin profile
    call the URL on its own permissions, so it can sign them. This uses
@@ -87,7 +90,8 @@ Lambda refuses a grant to a role it can't find.
    This prints the address, `https://<id>.lambda-url.us-west-2.on.aws/`, then
    `403` (an unsigned call is refused), then `204`, then the status JSON, such
    as `{"state":"ready","join_url":"https://foundry.craigdevjohnson.com:30000/join",...}`.
-   Repeat with `.prod`.
+   Repeat with `.prod`. The check never starts or stops the host: those are
+   tried through The Lobby, as their own change.
 5. Connect the site. In the-lobby, set `foundry_backend_url` and
    `foundry_backend_function_arn` in `infra/environments/dev/dev.tfvars` to the
    `dev` values of `tofu -chdir=infra output controller_urls` and

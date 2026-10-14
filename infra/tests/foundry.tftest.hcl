@@ -77,6 +77,14 @@ mock_provider "aws" {
   }
 }
 
+# Every document gets the mock's foundry-shutdown ARN otherwise.
+override_resource {
+  target = aws_ssm_document.stop
+  values = {
+    arn = "arn:aws:ssm:us-west-2:793680745829:document/foundry-stop"
+  }
+}
+
 # The controller's zip comes from `task build`, which the offline checks don't
 # run. The fixture stands in for it.
 variables {
@@ -185,6 +193,11 @@ run "host_instance_settings" {
   assert {
     condition     = aws_instance.host.instance_type == "t4g.small" && aws_instance.host.ami == "ami-0baa3cf0d687ee495"
     error_message = "The host is a t4g.small on the committed AL2023 arm64 AMI."
+  }
+
+  assert {
+    condition     = aws_instance.host.instance_initiated_shutdown_behavior == "stop"
+    error_message = "A power-off from inside the host must stop it, never terminate it: the foundry-stop document powers it off."
   }
 
   assert {
@@ -425,7 +438,7 @@ run "only_each_environments_site_role_may_call_its_controller" {
   }
 }
 
-run "controller_role_only_reads_and_writes_its_own_logs" {
+run "controller_role_is_least_privilege" {
   command = plan
 
   assert {
@@ -436,9 +449,35 @@ run "controller_role_only_reads_and_writes_its_own_logs" {
         "logs:PutLogEvents",
         "ec2:DescribeInstances",
         "ssm:DescribeInstanceInformation",
-      ]) && length(d.statement) == 2
+        "ssm:ListCommands",
+        "ec2:StartInstances",
+        "ssm:SendCommand",
+      ]) && length(d.statement) == 4
     ])
-    error_message = "The controller role grants exactly its log writes, ec2:DescribeInstances and ssm:DescribeInstanceInformation: no start, stop, SendCommand or parameter reads."
+    error_message = "The controller role grants exactly its log writes, the three reads, ec2:StartInstances and ssm:SendCommand: no EC2 stop and no parameter reads."
+  }
+
+  assert {
+    condition = alltrue([
+      for d in data.aws_iam_policy_document.controller : (
+        one([for s in d.statement : s if s.sid == "StartHost"]).actions == toset(["ec2:StartInstances"]) &&
+        one([for s in d.statement : s if s.sid == "StartHost"]).resources == toset(["arn:aws:ec2:us-west-2:793680745829:instance/i-0123456789abcdef0"])
+      )
+    ])
+    error_message = "The controller may start only the Foundry host."
+  }
+
+  assert {
+    condition = alltrue([
+      for d in data.aws_iam_policy_document.controller : (
+        one([for s in d.statement : s if s.sid == "StopHost"]).actions == toset(["ssm:SendCommand"]) &&
+        one([for s in d.statement : s if s.sid == "StopHost"]).resources == toset([
+          "arn:aws:ec2:us-west-2:793680745829:instance/i-0123456789abcdef0",
+          "arn:aws:ssm:us-west-2:793680745829:document/foundry-stop",
+        ])
+      )
+    ])
+    error_message = "The controller may send only the parameterless foundry-stop document, and only to the Foundry host: never foundry-shutdown alone or AWS-RunShellScript."
   }
 
   assert {
@@ -456,10 +495,10 @@ run "controller_role_only_reads_and_writes_its_own_logs" {
     condition = alltrue(flatten([
       for d in data.aws_iam_policy_document.controller : [
         for s in d.statement :
-        s.actions == toset(["ec2:DescribeInstances", "ssm:DescribeInstanceInformation"]) if contains(tolist(s.resources), "*")
+        s.actions == toset(["ec2:DescribeInstances", "ssm:DescribeInstanceInformation", "ssm:ListCommands"]) if contains(tolist(s.resources), "*")
       ]
     ]))
-    error_message = "Only the describe actions, which have no resource-level permissions, may use a * resource."
+    error_message = "Only the read actions, which have no resource-level permissions, may use a * resource."
   }
 
   assert {
@@ -487,14 +526,15 @@ run "controller_watches_the_host" {
 
   assert {
     condition = alltrue([
-      for f in aws_lambda_function.controller :
-      f.environment[0].variables == tomap({
-        FOUNDRY_AWS_REGION  = "us-west-2"
-        FOUNDRY_INSTANCE_ID = "i-0123456789abcdef0"
-        FOUNDRY_HTTPS_URL   = "https://foundry.craigdevjohnson.com:30000/join"
+      for environment in ["dev", "prod"] :
+      aws_lambda_function.controller[environment].environment[0].variables == tomap({
+        FOUNDRY_AWS_REGION    = "us-west-2"
+        FOUNDRY_INSTANCE_ID   = "i-0123456789abcdef0"
+        FOUNDRY_HTTPS_URL     = "https://foundry.craigdevjohnson.com:30000/join"
+        FOUNDRY_SITE_ROLE_ARN = "arn:aws:iam::793680745829:role/site-${environment}-server"
       })
     ])
-    error_message = "The controller gets the Region, the host's instance ID and Foundry's /join page, and nothing else."
+    error_message = "The controller gets the Region, the host's instance ID, Foundry's /join page and its own environment's site role, and nothing else."
   }
 
   assert {
@@ -572,4 +612,59 @@ run "controller_package_must_be_a_zip" {
   }
 
   expect_failures = [var.controller_package_path]
+}
+
+run "stop_document_shuts_foundry_down_then_powers_off" {
+  command = plan
+
+  assert {
+    condition = (
+      aws_ssm_document.stop.name == "foundry-stop" &&
+      aws_ssm_document.stop.document_type == "Command" &&
+      !contains(keys(jsondecode(aws_ssm_document.stop.content)), "parameters")
+    )
+    error_message = "foundry-stop is a Command document with no parameters, so a caller can't change what runs."
+  }
+
+  assert {
+    condition = (
+      length(jsondecode(aws_ssm_document.stop.content).mainSteps) == 1 &&
+      jsondecode(aws_ssm_document.stop.content).mainSteps[0].action == "aws:runShellScript" &&
+      jsondecode(aws_ssm_document.stop.content).mainSteps[0].inputs.timeoutSeconds == "300" &&
+      jsondecode(aws_ssm_document.stop.content).mainSteps[0].inputs.runCommand == [
+        file("templates/foundry-shutdown.sh"),
+        file("templates/foundry-power-off.sh"),
+      ]
+    )
+    error_message = "foundry-stop runs the same shutdown as foundry-shutdown and then the power-off, as one script, so the power-off runs only if the shutdown reached its end."
+  }
+
+  assert {
+    condition = (
+      strcontains(file("templates/foundry-power-off.sh"), "shutdown --poweroff +1") &&
+      jsondecode(aws_ssm_document.shutdown.content).mainSteps[0].inputs.runCommand == [file("templates/foundry-shutdown.sh")]
+    )
+    error_message = "The power-off waits a minute, and foundry-shutdown, which task host:stop runs, never powers the host off."
+  }
+}
+
+run "a_failed_stop_alerts" {
+  command = plan
+
+  assert {
+    condition = jsondecode(aws_cloudwatch_event_rule.stop_failed.event_pattern) == {
+      source        = ["aws.ssm"]
+      "detail-type" = ["EC2 Command Status-change Notification"]
+      detail = {
+        "document-name" = ["foundry-stop"]
+        status          = ["Failed", "TimedOut", "Cancelled"]
+      }
+    }
+    error_message = "A foundry-stop command that fails, times out or is cancelled must match the alert rule."
+  }
+
+  assert {
+    condition     = aws_cloudwatch_event_target.stop_failed.arn == "arn:aws:sns:us-west-2:793680745829:alerts" && aws_cloudwatch_event_target.stop_failed.rule == "foundry-stop-failed"
+    error_message = "The failed-stop rule notifies the workloads alerts topic."
+  }
 }

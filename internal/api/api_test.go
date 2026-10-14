@@ -50,17 +50,40 @@ func refuse(t *testing.T) Observer {
 	})
 }
 
+// report is one observation. A running host with a start time has had its
+// stops read and none found; any other host has not had them read.
 func report(host, agent, foundry string, launched time.Time) status.Report {
 	r := status.Report{ObservedAt: now}
 	r.Host.State, r.Host.Reason, r.Host.LaunchTime = host, "observed", launched
 	r.SSM.State, r.SSM.Reason = agent, "observed"
 	r.HTTPS.State, r.HTTPS.Reason = foundry, "observed"
+	r.Stop.State, r.Stop.Reason = stopFor(host, launched), "observed"
 	return r
+}
+
+func stopFor(host string, launched time.Time) string {
+	if host == "running" && !launched.IsZero() {
+		return "none"
+	}
+	return "not_checked"
+}
+
+// unchanged fails the test if anything starts or stops the host.
+type unchanged struct{ t *testing.T }
+
+func (u unchanged) Start(context.Context) (string, error) {
+	u.t.Error("the host was started")
+	return "", errors.New("unexpected start")
+}
+
+func (u unchanged) Stop(context.Context) (string, error) {
+	u.t.Error("the host was stopped")
+	return "", errors.New("unexpected stop")
 }
 
 func newServer(observer Observer) (http.Handler, *bytes.Buffer) {
 	logs := &bytes.Buffer{}
-	h := &Handler{Status: observer, JoinURL: joinURL, Log: slog.New(slog.NewJSONHandler(logs, nil))}
+	h := &Handler{Status: observer, Change: unchanged{}, JoinURL: joinURL, Log: slog.New(slog.NewJSONHandler(logs, nil))}
 	return h.Router(), logs
 }
 
@@ -138,7 +161,7 @@ func TestStateRules(t *testing.T) {
 			if a.StartedAt != nil && *a.StartedAt != test.launched.Format(time.RFC3339) {
 				t.Errorf("started_at %q, want %q", *a.StartedAt, test.launched.Format(time.RFC3339))
 			}
-			want := map[string]string{"host": test.host, "agent": test.agent, "foundry": test.foundry}
+			want := map[string]string{"host": test.host, "agent": test.agent, "foundry": test.foundry, "stop": stopFor(test.host, test.launched)}
 			if !reflect.DeepEqual(a.Checks, want) {
 				t.Errorf("checks %v, want %v", a.Checks, want)
 			}
@@ -229,11 +252,20 @@ func running(launched time.Time) *ec2.DescribeInstancesOutput {
 	}}}}}
 }
 
+type commandsFunc func(context.Context) (*ssm.ListCommandsOutput, error)
+
+func (f commandsFunc) ListCommands(ctx context.Context, _ *ssm.ListCommandsInput, _ ...func(*ssm.Options)) (*ssm.ListCommandsOutput, error) {
+	return f(ctx)
+}
+
+// noStops is a host that has had no stop since it started.
+var noStops = commandsFunc(func(context.Context) (*ssm.ListCommandsOutput, error) { return &ssm.ListCommandsOutput{}, nil })
+
 // service is the real observation engine over fake providers.
 func service(ec2Reader status.EC2Reader, ssmReader status.SSMReader, prober status.HTTPSProber) *status.Service {
 	return &status.Service{
 		Config: status.Config{Region: "us-west-2", InstanceID: instanceID, HTTPSURL: joinURL},
-		EC2:    ec2Reader, SSM: ssmReader, HTTPS: prober,
+		EC2:    ec2Reader, SSM: ssmReader, HTTPS: prober, Commands: noStops,
 		Now: func() time.Time { return now },
 	}
 }
@@ -346,8 +378,11 @@ func TestRoutes(t *testing.T) {
 		{http.MethodGet, "/", http.StatusNotFound, `{"code":"not_found"}`, ""},
 		{http.MethodGet, "/nowhere", http.StatusNotFound, `{"code":"not_found"}`, ""},
 		{http.MethodGet, "/server/", http.StatusNotFound, `{"code":"not_found"}`, ""},
-		{http.MethodPost, "/server/start", http.StatusNotFound, `{"code":"not_found"}`, ""},
-		{http.MethodPost, "/server/stop", http.StatusNotFound, `{"code":"not_found"}`, ""},
+		{http.MethodGet, "/server/start", http.StatusMethodNotAllowed, `{"code":"method_not_allowed"}`, "POST"},
+		{http.MethodPut, "/server/stop", http.StatusMethodNotAllowed, `{"code":"method_not_allowed"}`, "POST"},
+		{http.MethodPost, "/server/stop", http.StatusBadRequest, `{"code":"confirmation_required"}`, ""},
+		{http.MethodPost, "/server/restart", http.StatusNotFound, `{"code":"not_found"}`, ""},
+		{http.MethodPost, "/server/start/", http.StatusNotFound, `{"code":"not_found"}`, ""},
 		{http.MethodGet, "//server", http.StatusNotFound, `{"code":"not_found"}`, ""},
 		{http.MethodGet, "/server/../server", http.StatusNotFound, `{"code":"not_found"}`, ""},
 		{http.MethodGet, "/./healthz", http.StatusNotFound, `{"code":"not_found"}`, ""},
@@ -412,11 +447,11 @@ func TestSlowProvidersStillAnswerInTime(t *testing.T) {
 		state    string
 		checks   map[string]string
 	}{
-		{"EC2", service(hang, nil, nil), Unknown, map[string]string{"host": "unknown", "agent": "not_checked", "foundry": "not_checked"}},
-		{"agent and page", service(up, agentHangs, pageHangs), Unresponsive, map[string]string{"host": "running", "agent": "unknown", "foundry": "unreachable"}},
+		{"EC2", service(hang, nil, nil), Unknown, map[string]string{"host": "unknown", "agent": "not_checked", "foundry": "not_checked", "stop": "not_checked"}},
+		{"agent and page", service(up, agentHangs, pageHangs), Unresponsive, map[string]string{"host": "running", "agent": "unknown", "foundry": "unreachable", "stop": "none"}},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			h := (&Handler{Status: test.observer, JoinURL: joinURL, Log: slog.New(slog.DiscardHandler), Timeout: 50 * time.Millisecond}).Router()
+			h := (&Handler{Status: test.observer, Change: unchanged{t}, JoinURL: joinURL, Log: slog.New(slog.DiscardHandler), Timeout: 50 * time.Millisecond}).Router()
 			start := time.Now()
 			a := decode(t, do(h, http.MethodGet, "/server"))
 			if elapsed := time.Since(start); elapsed > 2*time.Second {

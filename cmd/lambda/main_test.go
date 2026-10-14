@@ -35,6 +35,21 @@ func TestInvalidConfigurationStopsBeforeServing(t *testing.T) {
 	}
 }
 
+// The site role is optional, but one that is not an IAM role ARN stops the
+// controller too.
+func TestInvalidSiteRoleStopsBeforeServing(t *testing.T) {
+	log := slog.New(slog.NewJSONHandler(io.Discard, nil))
+	for _, value := range []string{"site-dev-server", "arn:aws:iam::123456789012:user/site-dev-server", "arn:aws:sts::123456789012:assumed-role/site-dev-server/x"} {
+		handler, err := newHandler(context.Background(), environment(map[string]string{"FOUNDRY_SITE_ROLE_ARN": value}), log)
+		if handler != nil || err == nil || !strings.Contains(err.Error(), "FOUNDRY_SITE_ROLE_ARN") {
+			t.Fatalf("%q: handler=%v err=%v", value, handler, err)
+		}
+	}
+	if _, err := newHandler(context.Background(), environment(map[string]string{"FOUNDRY_SITE_ROLE_ARN": "arn:aws:iam::123456789012:role/site-dev-server"}), log); err != nil {
+		t.Fatal(err)
+	}
+}
+
 // A valid configuration builds the routes without credentials or an AWS call.
 func TestValidConfigurationServesWithoutAWS(t *testing.T) {
 	empty := filepath.Join(t.TempDir(), "none")

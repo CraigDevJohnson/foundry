@@ -1,7 +1,8 @@
-// The Foundry controller: it answers The Lobby's site with the host's status
-// and changes nothing (ADR 0005). On Lambda it serves through the Function URL
-// adapter (payload format 2.0); anywhere else it listens on a local port with
-// the caller's own AWS credentials.
+// The Foundry controller: it answers The Lobby's site with the host's status,
+// and starts and stops the host when the site asks (ADR 0005, ADR 0006). On
+// Lambda it serves through the Function URL adapter (payload format 2.0);
+// anywhere else it listens on a local port with the caller's own AWS
+// credentials.
 package main
 
 import (
@@ -19,6 +20,7 @@ import (
 	"github.com/awslabs/aws-lambda-go-api-proxy/httpadapter"
 
 	"github.com/CraigDevJohnson/foundry/internal/api"
+	"github.com/CraigDevJohnson/foundry/internal/control"
 	"github.com/CraigDevJohnson/foundry/internal/status"
 )
 
@@ -51,17 +53,25 @@ func newHandler(ctx context.Context, getenv func(string) string, log *slog.Logge
 	if err != nil {
 		return nil, err
 	}
+	site, err := api.SiteSession(getenv("FOUNDRY_SITE_ROLE_ARN"))
+	if err != nil {
+		return nil, err
+	}
 	awsConfig, err := config.LoadDefaultConfig(ctx, config.WithRegion(target.Region), config.WithRetryMaxAttempts(2))
 	if err != nil {
 		return nil, fmt.Errorf("load AWS configuration: %w", err)
 	}
+	ec2Client := ec2.NewFromConfig(awsConfig)
+	ssmClient := ssm.NewFromConfig(awsConfig)
 	service := &status.Service{
-		Config: target,
-		EC2:    ec2.NewFromConfig(awsConfig),
-		SSM:    ssm.NewFromConfig(awsConfig),
-		HTTPS:  status.NewHTTPProbe(),
+		Config:   target,
+		EC2:      ec2Client,
+		SSM:      ssmClient,
+		HTTPS:    status.NewHTTPProbe(),
+		Commands: ssmClient,
 	}
-	return (&api.Handler{Status: service, JoinURL: target.HTTPSURL, Log: log}).Router(), nil
+	change := &control.Service{InstanceID: target.InstanceID, EC2: ec2Client, SSM: ssmClient}
+	return (&api.Handler{Status: service, Change: change, JoinURL: target.HTTPSURL, SiteSession: site, Log: log}).Router(), nil
 }
 
 // listenAddr is FOUNDRY_ADDR, or 127.0.0.1:8083, beside the soccer

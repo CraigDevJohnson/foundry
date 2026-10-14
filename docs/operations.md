@@ -45,6 +45,8 @@ These are plain host start and stop, not the Start session and End session
 actions in [CONTEXT.md](../CONTEXT.md): stop takes no session backup, so the
 latest recovery point is the last scheduled snapshot. End session, which backs
 up first and keeps the host running if the backup fails, is separate work.
+The Lobby can start and stop the host too, through the controller
+([below](#the-lobbys-controller)).
 
 The Taskfile's host tasks find the host by its `Name=foundry` and
 `project=foundry` tags, so they keep working after a rebuild. Locally they use
@@ -298,13 +300,32 @@ Elastic IP `52.27.248.145` (`eipalloc-03508fd8e37c5f068`), data volume
 
 ## The Lobby's controller
 
-The Lobby's `/foundry` page reads the host's state from the controller,
+The Lobby's Foundry Tool reads the host's state from the controller,
 `foundry-dev-controller` and `foundry-prod-controller`, one per site
 environment (`infra/controller.tf`; deploying it is in
-[infra](../infra/README.md#deploying-the-controller)). It only reads: EC2's
-state, the SSM agent's connectivity and whether `/join` answers. It can't start
-or stop the host; that stays with the tasks and the Host control workflow
-above.
+[infra](../infra/README.md#deploying-the-controller)): EC2's state, the SSM
+agent's connectivity, whether `/join` answers and whether a stop is under way.
+A Member with the site's `foundry-admin` grant can also start and stop the host
+through it ([ADR 0006](adr/0006-the-lobby-starts-and-stops-the-host.md),
+[status API](status-api.md)). A start is an EC2 start. A stop, once the Member
+confirms nobody is playing, sends the `foundry-stop` document: the same
+shutdown as `host:stop` (above), then a power-off a minute later, which EC2
+turns into a stop because the host's instance-initiated shutdown behavior is
+`stop`. If the shutdown fails, the host stays on, as with `host:stop`.
+
+A failed, timed-out or cancelled `foundry-stop` emails through the workloads
+`alerts` topic (the `foundry-stop-failed` EventBridge rule). Foundry may then be
+down while the host runs. Read the command's output, then stop it with
+`task host:stop` or the Host control workflow, or start Foundry again. Reading
+command output uses `workloads-admin`, so an agent asks Craig first:
+
+```sh
+aws ssm list-commands --document-name foundry-stop --max-results 5 --profile workloads-admin
+aws ssm get-command-invocation --command-id <id> --instance-id <instance> --profile workloads-admin
+```
+
+Each start and stop is a `start` or `stop` line in the function's log, with
+who asked: the Member the site named, or the caller's own role session.
 
 The `foundry-<env>-controller-failing` alarm emails through the workloads
 `alerts` topic when the function crashed, timed out, or could not start, for
