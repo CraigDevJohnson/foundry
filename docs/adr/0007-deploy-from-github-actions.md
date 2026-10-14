@@ -75,7 +75,8 @@ What it may do is set by rules that hold whatever a commit to `main` says:
   host's interface, though never another address.
 - **The rest.** Only `foundry-*` functions, log groups, alarms and documents,
   the `foundry-stop-failed` rule and the snapshot policy tagged
-  `project=foundry`. A Function URL may only be `AWS_IAM`, an invoke grant may
+  `project=foundry`, which it changes but never creates: creating one also
+  tags it, and no condition can check the policy being tagged then. A Function URL may only be `AWS_IAM`, an invoke grant may
   name only The Lobby's `site-dev-server` and `site-prod-server`, and alarms
   and the rule may notify only the `alerts` topic.
 - It never reads a parameter or secret, sends a command or opens a session.
@@ -83,7 +84,8 @@ What it may do is set by rules that hold whatever a commit to `main` says:
 The role and the boundary live in their own root, `infra/bootstrap`, which
 Craig applies with `workloads-admin`, once and for each later change to it.
 So do changes to `foundry-host`, `foundry-dlm` and the state bucket's
-settings, the few things the deploy role can't change. The offline tests in
+settings, and creating or replacing the snapshot policy, the few things the
+deploy role can't do. The offline tests in
 `infra/bootstrap/tests` check the rules above against the plan.
 
 ## Considered options

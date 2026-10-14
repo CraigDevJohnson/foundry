@@ -305,6 +305,20 @@ run "ec2_changes_stay_on_foundry_resources" {
     error_message = "The project tag must only be set when a resource is created."
   }
 
+  # EC2 sets ec2:CreateAction to the API's bare name, so a value with the
+  # ec2: prefix never matches.
+  assert {
+    condition = anytrue([
+      for s in data.aws_iam_policy_document.deployer.statement :
+      s.sid == "TagOnCreate" && s.actions == toset(["ec2:CreateTags"]) &&
+      anytrue([
+        for c in s.condition : c.test == "StringEquals" && c.variable == "ec2:CreateAction" &&
+        toset(c.values) == toset(["AllocateAddress", "AuthorizeSecurityGroupEgress", "AuthorizeSecurityGroupIngress", "CreateSecurityGroup", "CreateVolume", "RunInstances"])
+      ])
+    ])
+    error_message = "TagOnCreate must name each create by its bare API name, such as RunInstances."
+  }
+
   # A grant on every resource holds only in us-west-2; the others name
   # us-west-2 in their ARNs.
   assert {
@@ -323,6 +337,30 @@ run "ec2_changes_stay_on_foundry_resources" {
 # The boundary is what a role the deploy role makes can ever do: Foundry's
 # hosts, documents and logs, and never IAM, parameters, keys or other
 # documents.
+# The deploy role changes only the snapshot policy tagged project=foundry and
+# never creates one: a create also tags the new policy, which no tag
+# condition can check.
+run "snapshot_policy_changes_only_foundrys" {
+  command = plan
+
+  assert {
+    condition = alltrue([
+      for s in data.aws_iam_policy_document.deployer.statement :
+      s.effect == "Deny" || !contains(tolist(s.actions), "dlm:CreateLifecyclePolicy")
+    ])
+    error_message = "The deploy role must not create a snapshot policy."
+  }
+
+  assert {
+    condition = alltrue([
+      for s in data.aws_iam_policy_document.deployer.statement :
+      s.effect == "Deny" || length([for a in s.actions : a if startswith(a, "dlm:") && a != "dlm:GetLifecyclePolicies"]) == 0 ||
+      anytrue([for c in s.condition : c.test == "StringEquals" && c.variable == "aws:ResourceTag/project" && toset(c.values) == toset(["foundry"])])
+    ])
+    error_message = "Every snapshot policy change needs the policy to carry project=foundry."
+  }
+}
+
 run "boundary_keeps_roles_to_foundry" {
   command = plan
 

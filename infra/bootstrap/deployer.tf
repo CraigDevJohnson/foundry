@@ -320,7 +320,8 @@ data "aws_iam_policy_document" "deployer" {
     }
   }
 
-  # Tagging a resource as it is made.
+  # Tagging a resource as it is made. ec2:CreateAction holds the API's bare
+  # name, such as RunInstances, not the IAM action.
   statement {
     sid       = "TagOnCreate"
     actions   = ["ec2:CreateTags"]
@@ -329,7 +330,7 @@ data "aws_iam_policy_document" "deployer" {
     condition {
       test     = "StringEquals"
       variable = "ec2:CreateAction"
-      values   = local.ec2_create_actions
+      values   = [for action in local.ec2_create_actions : trimprefix(action, "ec2:")]
     }
   }
 
@@ -551,23 +552,15 @@ data "aws_iam_policy_document" "deployer" {
     resources = [local.documents]
   }
 
-  # The snapshot policy, tagged project=foundry.
+  # The snapshot policy, tagged project=foundry, once it exists. Creating
+  # one also needs dlm:TagResource on the new policy, which has no tag yet to
+  # check, and a tag grant without that check could tag another project's
+  # policy into this one. So creating or replacing the policy stays with
+  # Craig's admin sign-in, like its role.
   statement {
     sid       = "SnapshotPolicyList"
     actions   = ["dlm:GetLifecyclePolicies"]
     resources = ["*"]
-  }
-
-  statement {
-    sid       = "SnapshotPolicyCreate"
-    actions   = ["dlm:CreateLifecyclePolicy"]
-    resources = ["*"]
-
-    condition {
-      test     = "StringEquals"
-      variable = "aws:RequestTag/project"
-      values   = ["foundry"]
-    }
   }
 
   statement {

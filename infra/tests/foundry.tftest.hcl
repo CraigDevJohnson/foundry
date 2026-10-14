@@ -709,14 +709,18 @@ run "stop_document_shuts_foundry_down_then_powers_off" {
       ) &&
       strcontains(
         jsondecode(aws_ssm_document.stop.content).mainSteps[0].inputs.runCommand[0],
-        "  if [[ -e \"$succeeded\" ]]; then\n    echo \"The other stop shut Foundry down; the host powers off in a minute\"\n    exit 0\n  fi\n  echo \"The other stop failed; leaving the host running\" >&2\n  exit 1\nfi\n"
+        "if powering_off; then\n  echo \"Another stop shut Foundry down; the host powers off in a minute\"\n  exit 0\nfi\nif [[ \"$waited\" == true ]]; then\n  echo \"The other stop failed; leaving the host running\" >&2\n  exit 1\nfi\nif ! rm -f \"$succeeded\"; then\n"
+      ) &&
+      strcontains(
+        jsondecode(aws_ssm_document.stop.content).mainSteps[0].inputs.runCommand[0],
+        "  written=$(stat -c %Y \"$succeeded\" 2>/dev/null) || return 1\n  (($(date +%s) - written < 120))\n"
       ) &&
       endswith(
         jsondecode(aws_ssm_document.stop.content).mainSteps[0].inputs.runCommand[0],
         "${file("templates/foundry-power-off.sh")}\n: >\"$succeeded\"\n"
       )
     )
-    error_message = "Only one foundry-stop runs the shutdown at a time; another waits and ends as it did, succeeding only once the first scheduled the power-off."
+    error_message = "Only one foundry-stop runs the shutdown; one that waited for it, or arrives within two minutes of its success, ends as it did, succeeding only once the power-off is scheduled."
   }
 
   assert {
