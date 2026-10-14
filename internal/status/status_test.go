@@ -419,3 +419,35 @@ func TestStopsUnderWay(t *testing.T) {
 		})
 	}
 }
+
+// A stop whose record Systems Manager no longer has, once no stop could still
+// be running, is over: it neither holds the host in stopping nor blocks
+// another stop.
+func TestAnExpiredStopIsOver(t *testing.T) {
+	for _, test := range []struct {
+		name          string
+		age           time.Duration
+		state, reason string
+	}{
+		{"within the lifetime", stopLifetime - time.Second, "unknown", "no_record"},
+		{"at the lifetime", stopLifetime, "none", "expired"},
+		{"a month on", 31 * 24 * time.Hour, "none", "expired"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			requested := testNow.Add(-test.age)
+			s := testService(t)
+			s.EC2 = ec2Func(func(context.Context, *ec2.DescribeInstancesInput) (*ec2.DescribeInstancesOutput, error) {
+				output := withStop(hostOutput("running"), testCommand, requested.Format(time.RFC3339))
+				output.Reservations[0].Instances[0].LaunchTime = aws.Time(requested.Add(-time.Hour))
+				return output, nil
+			})
+			s.Commands = invocationFunc(func(context.Context, *ssm.GetCommandInvocationInput) (*ssm.GetCommandInvocationOutput, error) {
+				return nil, &smithy.GenericAPIError{Code: "InvocationDoesNotExist"}
+			})
+			r := s.Observe(context.Background())
+			if r.Stop.State != test.state || r.Stop.Reason != test.reason || !r.Stop.RequestedAt.Equal(requested) {
+				t.Fatalf("stop=%+v", r.Stop)
+			}
+		})
+	}
+}

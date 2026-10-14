@@ -20,7 +20,15 @@ const instanceID = "i-0123456789abcdef0"
 
 type startFunc func(context.Context, *ec2.StartInstancesInput) (*ec2.StartInstancesOutput, error)
 
-func (f startFunc) StartInstances(ctx context.Context, in *ec2.StartInstancesInput, _ ...func(*ec2.Options)) (*ec2.StartInstancesOutput, error) {
+// StartInstances fails the start unless it is asked with retries turned off.
+func (f startFunc) StartInstances(ctx context.Context, in *ec2.StartInstancesInput, optFns ...func(*ec2.Options)) (*ec2.StartInstancesOutput, error) {
+	options := ec2.Options{RetryMaxAttempts: 2}
+	for _, fn := range optFns {
+		fn(&options)
+	}
+	if options.RetryMaxAttempts != 1 {
+		return nil, errors.New("the start could be asked more than once")
+	}
 	return f(ctx, in)
 }
 

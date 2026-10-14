@@ -169,6 +169,18 @@ func TestStateRules(t *testing.T) {
 	}
 }
 
+// A running host whose stop could not be read is unknown, whatever its join
+// page answers: a stop may be under way.
+func TestAnUnreadableStopIsUnknown(t *testing.T) {
+	r := report("running", "online", "responding", now.Add(-time.Hour))
+	r.Stop.State, r.Stop.Reason = "unknown", "timeout"
+	h, _ := newServer(fixed(r))
+	a := decode(t, do(h, http.MethodGet, "/server"))
+	if a.State != Unknown || a.Checks["stop"] != "unknown" {
+		t.Fatalf("%+v", a)
+	}
+}
+
 // Nothing but a running host whose join page answered 200 is ever ready.
 func TestOnlyAnAnsweringJoinPageIsReady(t *testing.T) {
 	for _, host := range []string{"pending", "running", "stopping", "stopped", "shutting-down", "unknown"} {

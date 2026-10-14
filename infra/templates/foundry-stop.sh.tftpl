@@ -9,8 +9,14 @@ set -u
 
 shutdown=$(mktemp) || exit 1
 trap 'rm -f "$shutdown"' EXIT
-cat >"$shutdown" <<'FOUNDRY_SHUTDOWN_SCRIPT'
+# A partial file could run as a shorter script that exits 0, so a failed
+# write stops here, before anything runs.
+if ! cat >"$shutdown" <<'FOUNDRY_SHUTDOWN_SCRIPT'
 ${shutdown_script}FOUNDRY_SHUTDOWN_SCRIPT
+then
+  echo "Could not write the shutdown script; leaving the host running" >&2
+  exit 1
+fi
 
 if ! bash "$shutdown"; then
   echo "The shutdown failed; leaving the host running" >&2

@@ -193,8 +193,9 @@ func (h *Handler) answer(report status.Report, state string) serverStatus {
 }
 
 // State derives the reported state from one observation. A running host is
-// stopping while a stop is under way, and otherwise ready only when its join
-// page answered 200. A running host whose page does not answer is starting
+// unknown when the stop recorded on it could not be read, because one may be
+// under way; it is stopping while a stop is under way, and otherwise ready
+// only when its join page answered 200. A running host whose page does not answer is starting
 // for bootGrace after EC2 started it, and unresponsive after that or when EC2
 // gave no start time. A host EC2 could not describe is unknown, never
 // guessed. GET /server answers a missing or terminated host with no_server
@@ -208,6 +209,9 @@ func State(report status.Report) string {
 	case "stopping", "shutting-down":
 		return Stopping
 	case "running":
+		if report.Stop.State == "unknown" {
+			return Unknown
+		}
 		if stopUnderWay(report) {
 			return Stopping
 		}
@@ -304,13 +308,14 @@ func (h *Handler) start(w http.ResponseWriter, r *http.Request) {
 // host already stopped or stopping, or with a stop under way, is left as it
 // is; one still starting is refused until it is running.
 func (h *Handler) stop(w http.ResponseWriter, r *http.Request) {
+	who := h.whoAsked(r)
 	if !confirmed(w, r) {
+		h.logAsked(r.Context(), slog.LevelInfo, "stop", "confirmation_required", who)
 		writeJSON(w, http.StatusBadRequest, map[string]string{"code": "confirmation_required"})
 		return
 	}
 	ctx, cancel := context.WithTimeout(r.Context(), ChangeTimeout)
 	defer cancel()
-	who := h.whoAsked(r)
 	report := h.observeForChange(ctx)
 	state := State(report)
 	switch {
@@ -319,7 +324,7 @@ func (h *Handler) stop(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusNotFound, map[string]string{"code": "no_server"})
 		return
 	case state == Unknown || (report.Host.State == "running" && !stopsKnown(report)):
-		// Without the stops this run of the host has had, a second one could
+		// Without the stop recorded on a running host, a second one could
 		// overlap the first; nothing is sent.
 		h.logChange(ctx, slog.LevelWarn, "stop", "status_unknown", who, report)
 		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"code": "status_unknown"})
@@ -356,8 +361,8 @@ func (h *Handler) stop(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusAccepted, h.answer(sent, State(sent)))
 }
 
-// stopsKnown says whether the stops sent since EC2 last started the host were
-// read.
+// stopsKnown says whether the stop recorded on the host since EC2 last
+// started it was read.
 func stopsKnown(report status.Report) bool {
 	switch report.Stop.State {
 	case "none", "in_progress", "succeeded", "failed":
@@ -444,11 +449,16 @@ func SiteSession(roleARN string) (string, error) {
 // what the host looked like, so the operator can follow every change.
 func (h *Handler) logChange(ctx context.Context, level slog.Level, action, outcome string, who asker, report status.Report, extra ...any) {
 	attributes := []any{
-		"outcome", outcome,
-		"caller", who.caller,
 		"host", report.Host.State, "host_reason", report.Host.Reason,
 		"stop", report.Stop.State, "stop_reason", report.Stop.Reason,
 	}
+	h.logAsked(ctx, level, action, outcome, who, append(attributes, extra...)...)
+}
+
+// logAsked writes a change's log line with who asked, for a change refused
+// before the host was observed too.
+func (h *Handler) logAsked(ctx context.Context, level slog.Level, action, outcome string, who asker, extra ...any) {
+	attributes := []any{"outcome", outcome, "caller", who.caller}
 	if who.member != "" {
 		attributes = append(attributes, "member", who.member)
 	}

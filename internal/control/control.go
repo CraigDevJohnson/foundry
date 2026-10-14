@@ -59,11 +59,13 @@ type Service struct {
 }
 
 // Start asks EC2 to start the host and returns the state EC2 reports for it
-// afterwards, normally pending.
+// afterwards, normally pending. It is asked once: a retry after an answer that
+// was lost would find the host already starting, and could report it as
+// refused.
 func (s *Service) Start(ctx context.Context) (string, error) {
 	ctx, cancel := context.WithTimeout(ctx, status.ProviderTimeout)
 	defer cancel()
-	output, err := s.EC2.StartInstances(ctx, &ec2.StartInstancesInput{InstanceIds: []string{s.InstanceID}})
+	output, err := s.EC2.StartInstances(ctx, &ec2.StartInstancesInput{InstanceIds: []string{s.InstanceID}}, func(o *ec2.Options) { o.RetryMaxAttempts = 1 })
 	if err != nil {
 		if code(err) == "IncorrectInstanceState" {
 			return "", ErrNotStopped

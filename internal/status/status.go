@@ -40,6 +40,12 @@ const (
 // is under way, eventually.
 const invocationGrace = 2 * time.Minute
 
+// stopLifetime is how long a stop can run at most: a 60-second delivery
+// timeout (internal/control) and the document's 5-minute execution timeout,
+// with room to spare. After that a stop Systems Manager has no record of is
+// over, because its history has expired, and no longer holds anything up.
+const stopLifetime = 10 * time.Minute
+
 // commandID is the form of a Systems Manager command ID.
 var commandID = regexp.MustCompile(`^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$`)
 
@@ -239,7 +245,8 @@ func (s *Service) agent(ctx context.Context) SSMObservation {
 // stop follows the latest stop sent to the host, which the controller recorded
 // on the host's tags, if it was sent since EC2 last started the host: a stop
 // from an earlier run never counts. Without a start time there is no such
-// bound, and nothing is guessed.
+// bound, and nothing is guessed. A stop whose record has expired is reported
+// as none: it is long over, whatever it did.
 func (s *Service) stop(ctx context.Context, host HostObservation) StopObservation {
 	if host.LaunchTime.IsZero() {
 		return StopObservation{Observation: Observation{State: "not_checked", Reason: "no_launch_time"}}
@@ -265,11 +272,14 @@ func (s *Service) stop(ctx context.Context, host HostObservation) StopObservatio
 	if err != nil {
 		var apiError smithy.APIError
 		if errors.As(err, &apiError) && apiError.ErrorCode() == "InvocationDoesNotExist" {
-			if s.now().Sub(requested) < invocationGrace {
+			switch age := s.now().Sub(requested); {
+			case age < invocationGrace:
 				result.State, result.Reason = "in_progress", "not_recorded_yet"
-				return result
+			case age < stopLifetime:
+				result.Reason = "no_record"
+			default:
+				result.State, result.Reason = "none", "expired"
 			}
-			result.Reason = "no_record"
 			return result
 		}
 		result.Reason = providerReason(err)

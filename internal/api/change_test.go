@@ -171,6 +171,7 @@ func TestStartLeavesOtherHostsAlone(t *testing.T) {
 		{"shutting down", report("shutting-down", "not_checked", "not_checked", hourAgo), http.StatusConflict, "stopping"},
 		{"stop under way", withStop(readyHost, "in_progress", recently), http.StatusConflict, "stopping"},
 		{"stop about to power off", withStop(report("running", "online", "unreachable", hourAgo), "succeeded", recently), http.StatusConflict, "stopping"},
+		{"stop unreadable", withStop(readyHost, "unknown", time.Time{}), http.StatusServiceUnavailable, "status_unknown"},
 		{"terminated", report("terminated", "not_checked", "not_checked", hourAgo), http.StatusNotFound, "no_server"},
 		{"not found", report("not_found", "not_checked", "not_checked", time.Time{}), http.StatusNotFound, "no_server"},
 		{"EC2 unreadable", report("unknown", "not_checked", "not_checked", time.Time{}), http.StatusServiceUnavailable, "status_unknown"},
@@ -224,10 +225,13 @@ func TestStopNeedsTheConfirmation(t *testing.T) {
 		"nobody_playing=true",
 	} {
 		change := &changer{}
-		h, _ := changeServer(refuse(t), change)
+		h, logs := changeServer(refuse(t), change)
 		checkCode(t, post(h, "/server/stop", body), http.StatusBadRequest, "confirmation_required")
 		if _, stops := change.counts(); stops != 0 {
 			t.Fatalf("%q: stopped", body)
+		}
+		if !strings.Contains(logs.String(), `"level":"INFO","msg":"stop","outcome":"confirmation_required","caller":"local"`) {
+			t.Fatalf("%q: logs %s", body, logs)
 		}
 	}
 	change := &changer{}

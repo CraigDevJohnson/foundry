@@ -61,7 +61,7 @@ URL, AWS role or command: those come only from the function's configuration.
   | `ready` | EC2 reports `running`, no stop is under way, and the join page answered 200. Nothing else is ever `ready`. |
   | `stopping` | EC2 reports `stopping` or `shutting-down`. Or EC2 reports `running` and a stop is under way: `checks.stop` is `in_progress`, or `succeeded` less than 15 minutes after the stop was sent, while the host powers off. |
   | `unresponsive` | EC2 reports `running`, the join page does not answer 200, and EC2 started the host 10 minutes ago or more, or gave no start time. The host is on but Foundry is not answering players: no world is open, Foundry shows its license page after a rebuild, it crashed, or a stop shut it down but the host never powered off. |
-  | `unknown` | EC2's state could not be read: a timeout, access denied, a provider error or a record that does not match. It is never guessed. |
+  | `unknown` | EC2's state could not be read: a timeout, access denied, a provider error or a record that does not match. Or EC2 reports `running` and the stop recorded on the host could not be read (`checks.stop` is `unknown`), so a stop may be under way. It is never guessed. |
 
   The 10 minutes count from EC2's `LaunchTime`, which EC2 resets on every
   start. The agent's state never changes `state`. A stop under way comes
@@ -79,7 +79,7 @@ URL, AWS role or command: those come only from the function's configuration.
   | `host` | `pending`, `running`, `stopping`, `stopped`, `shutting-down`, `unknown` | EC2's lifecycle state for the configured instance |
   | `agent` | `online`, `offline`, `unknown`, `not_checked` | Whether the Systems Manager agent is connected. A missing record is `unknown`, not `offline` |
   | `foundry` | `responding`, `unexpected_response`, `unreachable`, `unknown`, `not_checked` | Whether the join page answered HTTP 200 within the time and size limits |
-  | `stop` | `none`, `in_progress`, `succeeded`, `failed`, `unknown`, `not_checked` | The stop recorded on the host, if it was sent since EC2 last started the host: none, still running (or being cancelled), done (Foundry is down and the host powers off a minute later), or failed, timed out or cancelled (the host stays on) |
+  | `stop` | `none`, `in_progress`, `succeeded`, `failed`, `unknown`, `not_checked` | The stop recorded on the host, if it was sent since EC2 last started the host: none, still running (or being cancelled), done (Foundry is down and the host powers off a minute later), or failed, timed out or cancelled (the host stays on). A stop whose record Systems Manager no longer keeps is `none`: it can't still be running |
 
   `agent`, `foundry` and `stop` are `not_checked` unless EC2 reports the host
   `running`; `stop` is also `not_checked` when EC2 gave no start time to count
@@ -170,7 +170,9 @@ operator calling with the admin profile, their own role session. When the
 caller is the role in `FOUNDRY_SITE_ROLE_ARN`, the line also carries `member`,
 the Member the site named in `X-Lobby-Member`, or `unreadable` when that is not
 a plain email address. Any other caller's `X-Lobby-Member` is ignored. On a
-developer's computer there is no request context, and `caller` is `local`.
+developer's computer there is no request context, and `caller` is `local`. A
+stop refused for its missing confirmation is logged too, with the outcome
+`confirmation_required`.
 
 ## Other routes
 
@@ -195,7 +197,10 @@ Every answer carries `Cache-Control: no-store`, and every JSON body
    since EC2's `LaunchTime`, Systems Manager `GetCommandInvocation` for that
    command on that instance, which decides `checks.stop`. Systems Manager may
    have no record of a command for a short while after it is sent: for 2
-   minutes that counts as `in_progress`, and after that as `unknown`. A tag
+   minutes that counts as `in_progress`, and after that as `unknown`. From 10
+   minutes after it was sent, when no stop can still be running, a missing
+   record means Systems Manager's history has expired, and it counts as
+   `none`. A tag
    that is not a command ID or a time, or a record for another command,
    instance or document, is `unknown`. The controller never lists commands:
    `ListCommands` would show every command sent in the account, with its
@@ -272,9 +277,11 @@ The three required settings default to `us-west-2`, the host found by its
 `Name=foundry` and `project=foundry` tags, and the join page; set any of them
 to override it. `POST /server/start` and `POST /server/stop` change the real
 host with your credentials, so they need an admin profile and Craig's approval
-like any other change; `workloads-readonly` is refused. `FOUNDRY_ADDR` changes the address.
-The local server answers only requests addressed to `localhost` or an IP
-address (`421` with `{"code": "not_local"}` otherwise) and refuses a browser's
+like any other change; `workloads-readonly` is refused. `FOUNDRY_ADDR` changes the address,
+which must be a loopback address such as `127.0.0.1:9000`: the server has no
+sign-in, so it refuses to start on an address another computer could reach.
+It answers only requests addressed to `localhost` or a loopback address
+(`421` with `{"code": "not_local"}` otherwise) and refuses a browser's
 cross-origin `POST` with `403`, so a web page open on your computer can't use
 your credentials through it; curl is unaffected. The Lobby's site can't
 call it from a developer's computer: sign-in is disabled there, so the site's

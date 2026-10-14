@@ -657,10 +657,10 @@ run "stop_document_shuts_foundry_down_then_powers_off" {
     condition = (
       strcontains(
         jsondecode(aws_ssm_document.stop.content).mainSteps[0].inputs.runCommand[0],
-        "<<'FOUNDRY_SHUTDOWN_SCRIPT'\n${file("templates/foundry-shutdown.sh")}FOUNDRY_SHUTDOWN_SCRIPT\n\nif ! bash \"$shutdown\"; then\n  echo \"The shutdown failed; leaving the host running\" >&2\n  exit 1\nfi\n\n${file("templates/foundry-power-off.sh")}"
+        "if ! cat >\"$shutdown\" <<'FOUNDRY_SHUTDOWN_SCRIPT'\n${file("templates/foundry-shutdown.sh")}FOUNDRY_SHUTDOWN_SCRIPT\nthen\n  echo \"Could not write the shutdown script; leaving the host running\" >&2\n  exit 1\nfi\n\nif ! bash \"$shutdown\"; then\n  echo \"The shutdown failed; leaving the host running\" >&2\n  exit 1\nfi\n\n${file("templates/foundry-power-off.sh")}"
       )
     )
-    error_message = "foundry-stop must run the shutdown script whole, from its own file, and power off only if it exits 0."
+    error_message = "foundry-stop must write the shutdown script whole to its own file, stop if that write fails, run it, and power off only if it exits 0."
   }
 
   assert {
