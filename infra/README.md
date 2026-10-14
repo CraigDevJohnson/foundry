@@ -96,7 +96,7 @@ today, reads included (`ec2_read_actions`, `ec2_create_actions` and
 from Foundry's own instances. A change that adds a new kind of EC2 resource,
 or an argument that needs another call, adds that call there and is applied
 to the bootstrap first. The role's one inline policy is close to IAM's limit
-of 10,240 characters (about 10,160 now), so a change that adds much more
+of 10,240 characters (about 10,100 now), so a change that adds much more
 moves some statements into a managed policy.
 
 One time, in GitHub, at Settings › Environments, after the repository is

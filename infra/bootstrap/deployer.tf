@@ -60,10 +60,10 @@ locals {
 
   # The EC2 reads the provider makes for the infra root's resources in a
   # create, a refresh, an update, a host rebuild and a delete (recorded
-  # against a local EC2 mock), and the wait after a volume change. None of
-  # them returns another workload's user data or secrets: the instance reads
-  # that can, user data and UEFI variables, are granted only on Foundry's
-  # instances (Ec2ReadFoundryInstances).
+  # against a local EC2 mock and checked against the provider's source).
+  # None of them returns another workload's user data or secrets: the
+  # instance read that can is granted only on Foundry's instances
+  # (Ec2ReadFoundryInstances).
   ec2_read_actions = [
     "ec2:DescribeAddresses",
     "ec2:DescribeAddressesAttribute",
@@ -78,7 +78,6 @@ locals {
     "ec2:DescribeSubnets",
     "ec2:DescribeTags",
     "ec2:DescribeVolumes",
-    "ec2:DescribeVolumesModifications",
     "ec2:DescribeVpcAttribute",
     "ec2:DescribeVpcs",
   ]
@@ -305,10 +304,10 @@ data "aws_iam_policy_document" "deployer" {
   }
 
   # An instance's user data can hold another workload's secrets, so it is
-  # read only from Foundry's instances, as are its UEFI variables.
+  # read only from Foundry's instances.
   statement {
     sid       = "Ec2ReadFoundryInstances"
-    actions   = ["ec2:DescribeInstanceAttribute", "ec2:GetInstanceUefiData"]
+    actions   = ["ec2:DescribeInstanceAttribute"]
     resources = ["arn:aws:ec2:${local.region}:${local.account}:instance/*"]
 
     condition {
