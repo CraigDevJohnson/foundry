@@ -22,6 +22,12 @@ mock_provider "aws" {
   }
 }
 
+# tofu test can't import, so the plan here makes the Host control role
+# rather than adopting it.
+variables {
+  adopt_host_control_role = false
+}
+
 run "deployer_trusts_only_the_deploy_environment" {
   command = plan
 
@@ -41,25 +47,43 @@ run "deployer_trusts_only_the_deploy_environment" {
   }
 }
 
-# A role is made or given a policy only inside the boundary, the boundary
-# stays on, the deploy role can't reach itself and never becomes another role.
+# The deploy role never makes a role or changes who may assume one: IAM has
+# no condition key on a trust policy, so a role it made could trust an outside
+# account. It only sets the inline policies of the roles roles.tf makes, while
+# they carry the boundary, which stays on. It can't reach itself and never
+# becomes another role.
 run "roles_change_only_inside_the_boundary" {
   command = plan
 
   assert {
+    condition = toset(flatten([
+      for s in data.aws_iam_policy_document.deployer.statement :
+      [for a in s.actions : a if startswith(a, "iam:")] if s.effect != "Deny"
+      ])) == toset([
+      "iam:GetInstanceProfile", "iam:GetRole", "iam:GetRolePolicy", "iam:ListAttachedRolePolicies",
+      "iam:ListInstanceProfileTags", "iam:ListInstanceProfilesForRole", "iam:ListRolePolicies", "iam:ListRoleTags",
+      "iam:DeleteRolePolicy", "iam:DetachRolePolicy", "iam:PutRolePolicy", "iam:PassRole",
+    ])
+    error_message = "The deploy role may only read roles, set the bounded roles' inline policies and pass roles: no CreateRole, UpdateAssumeRolePolicy, DeleteRole, managed policy or boundary change."
+  }
+
+  assert {
     condition = alltrue([
       for s in data.aws_iam_policy_document.deployer.statement :
-      length(setintersection(s.actions, toset([
-        "iam:AttachRolePolicy", "iam:CreateRole", "iam:DeleteRolePolicy", "iam:DetachRolePolicy",
-        "iam:PutRolePermissionsBoundary", "iam:PutRolePolicy",
-        ]))) == 0 || (
-        s.sid == "RolesInsideBoundary" && anytrue([
+      length(setintersection(s.actions, toset(["iam:DeleteRolePolicy", "iam:DetachRolePolicy", "iam:PutRolePolicy"]))) == 0 || (
+        s.sid == "RolesInsideBoundary" &&
+        s.resources == toset([
+          "arn:aws:iam::793680745829:role/foundry-dev-controller",
+          "arn:aws:iam::793680745829:role/foundry-prod-controller",
+          "arn:aws:iam::793680745829:role/foundry-host-control-ci",
+        ]) &&
+        anytrue([
           for c in s.condition : c.test == "StringEquals" && c.variable == "iam:PermissionsBoundary" &&
           toset(c.values) == toset(["arn:aws:iam::793680745829:policy/foundry-workload-boundary"])
         ])
       )
     ])
-    error_message = "Only RolesInsideBoundary may grant a role's policies, and only with the boundary on."
+    error_message = "Only RolesInsideBoundary may change a role's policies, only on the two controllers and the Host control role, and only with the boundary on."
   }
 
   assert {
@@ -100,10 +124,10 @@ run "roles_change_only_inside_the_boundary" {
   assert {
     condition = alltrue(flatten([
       for s in data.aws_iam_policy_document.deployer.statement : [
-        for a in s.actions : !startswith(a, "iam:") || startswith(a, "iam:Get") || startswith(a, "iam:List") || a == "iam:PassRole" || contains(["RolesInsideBoundary", "BoundedRoles"], s.sid)
+        for a in s.actions : !startswith(a, "iam:") || startswith(a, "iam:Get") || startswith(a, "iam:List") || a == "iam:PassRole" || s.sid == "RolesInsideBoundary"
       ] if s.effect != "Deny"
     ]))
-    error_message = "IAM changes belong in RolesInsideBoundary or BoundedRoles, nowhere else."
+    error_message = "IAM changes belong in RolesInsideBoundary, nowhere else."
   }
 }
 
@@ -112,15 +136,55 @@ run "roles_are_passed_only_to_their_service" {
   command = plan
 
   assert {
-    condition = jsonencode({
-      for s in data.aws_iam_policy_document.deployer.statement :
-      one(s.resources) => [for c in s.condition : c.values if c.variable == "iam:PassedToService"][0]
-      if contains(tolist(s.actions), "iam:PassRole")
-      }) == jsonencode({
-      "arn:aws:iam::793680745829:role/foundry-*-controller" = ["lambda.amazonaws.com"]
-      "arn:aws:iam::793680745829:role/foundry-host"         = ["ec2.amazonaws.com"]
+    condition = jsonencode(merge([
+      for s in data.aws_iam_policy_document.deployer.statement : {
+        for r in s.resources : r => [for c in s.condition : c.values if c.variable == "iam:PassedToService"][0]
+      } if contains(tolist(s.actions), "iam:PassRole")
+      ]...)) == jsonencode({
+      "arn:aws:iam::793680745829:role/foundry-dev-controller"  = ["lambda.amazonaws.com"]
+      "arn:aws:iam::793680745829:role/foundry-host"            = ["ec2.amazonaws.com"]
+      "arn:aws:iam::793680745829:role/foundry-prod-controller" = ["lambda.amazonaws.com"]
     })
-    error_message = "PassRole must name one role per statement and the one service that uses it."
+    error_message = "PassRole must name each role and the one service that uses it."
+  }
+}
+
+# The controllers' execution roles and the Host control workflow's role are
+# made here, inside the boundary, and trust only what uses them.
+run "foundry_roles_are_made_here_inside_the_boundary" {
+  command = plan
+
+  assert {
+    condition = alltrue([
+      for role in concat([aws_iam_role.host_control], values(aws_iam_role.controller)) :
+      role.permissions_boundary == "arn:aws:iam::793680745829:policy/foundry-workload-boundary"
+    ]) && toset([for r in concat([aws_iam_role.host_control], values(aws_iam_role.controller)) : r.name]) == toset(["foundry-host-control-ci", "foundry-dev-controller", "foundry-prod-controller"])
+    error_message = "foundry-dev-controller, foundry-prod-controller and foundry-host-control-ci must carry foundry-workload-boundary."
+  }
+
+  assert {
+    condition = (
+      length(data.aws_iam_policy_document.controller_trust.statement) == 1 &&
+      data.aws_iam_policy_document.controller_trust.statement[0].actions == toset(["sts:AssumeRole"]) &&
+      one(data.aws_iam_policy_document.controller_trust.statement[0].principals).type == "Service" &&
+      one(data.aws_iam_policy_document.controller_trust.statement[0].principals).identifiers == toset(["lambda.amazonaws.com"])
+    )
+    error_message = "Only Lambda may assume a controller role."
+  }
+
+  assert {
+    condition = (
+      length(data.aws_iam_policy_document.host_control_trust.statement) == 1 &&
+      data.aws_iam_policy_document.host_control_trust.statement[0].actions == toset(["sts:AssumeRoleWithWebIdentity"]) &&
+      one(data.aws_iam_policy_document.host_control_trust.statement[0].principals).identifiers == toset(["arn:aws:iam::793680745829:oidc-provider/token.actions.githubusercontent.com"]) &&
+      jsonencode({
+        for c in data.aws_iam_policy_document.host_control_trust.statement[0].condition : c.variable => [c.test, c.values]
+        }) == jsonencode({
+        "token.actions.githubusercontent.com:aud" = ["StringEquals", ["sts.amazonaws.com"]]
+        "token.actions.githubusercontent.com:sub" = ["StringEquals", ["repo:CraigDevJohnson@42454849/foundry@1361164956:environment:foundry-host"]]
+      })
+    )
+    error_message = "The Host control role must trust only GitHub's tokens for this repository's foundry-host environment, with the STS audience."
   }
 }
 
@@ -357,9 +421,6 @@ run "ec2_changes_stay_on_foundry_resources" {
   }
 }
 
-# The boundary is what a role the deploy role makes can ever do: Foundry's
-# hosts, documents and logs, and never IAM, parameters, keys or other
-# documents.
 # The deploy role only reads the snapshot policy: a policy can snapshot any
 # volume its tags match and share the snapshots, which no DLM condition
 # limits, so every change to it is an admin apply.
@@ -385,6 +446,9 @@ run "snapshot_policy_is_read_only" {
   }
 }
 
+# The boundary is the most the controllers and the Host control role can
+# ever do, whatever inline policy a deploy gives them: Foundry's hosts,
+# documents and logs, and never IAM, parameters, keys or other documents.
 run "boundary_keeps_roles_to_foundry" {
   command = plan
 

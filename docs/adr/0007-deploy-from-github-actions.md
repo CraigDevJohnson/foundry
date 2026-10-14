@@ -48,14 +48,20 @@ the token of a job in this repository's `deploy` Environment, with the exact
 What it may do is set by rules that hold whatever a commit to `main` says:
 
 - **State.** It reads and writes only the `infra` root's state key and lock
-  file, and only reads the bucket's settings.
-- **IAM.** It may create or change only the controllers' roles and
-  `foundry-host-control-ci`, and only inside the `foundry-workload-boundary`
-  permissions boundary, which it can never remove. The boundary allows only
-  what those roles need on hosts tagged `project=foundry`, Foundry's own
-  documents and log streams, and never IAM, a parameter or a key. So no role
-  the deploy role makes can do more than the controllers already do. It
-  never assumes a role, so changing a role's trust lends it nothing.
+  file, and only reads the bucket's settings. Because it can write that
+  state, every `init` of the root, in the workflow or on a computer, uses
+  `-lockfile=readonly`: a plain `init` would install any provider the state
+  names, and a plan with an admin sign-in would then run it.
+- **IAM.** It never makes, deletes or re-trusts a role. IAM has no
+  condition key on a trust policy, so a role that could make one could leave
+  behind a role an outside account assumes after the run has ended. The
+  controllers' roles and `foundry-host-control-ci` are made by
+  `infra/bootstrap`, with their trust policies, by Craig. The deploy role
+  only sets those three roles' inline policies, and only while they carry
+  the `foundry-workload-boundary` permissions boundary, which it can never
+  remove. The boundary allows only what those roles need on hosts tagged
+  `project=foundry`, Foundry's own documents and log streams, and never IAM,
+  a parameter or a key. It never assumes a role.
 - **The host's role.** It may pass `foundry-host` to EC2, so it can rebuild
   the host, but never change the role: it reads Foundry's SecureStrings,
   which the boundary doesn't allow.
@@ -68,9 +74,11 @@ What it may do is set by rules that hold whatever a commit to `main` says:
 - **What the host can reach.** Because it rebuilds the host, sets the host's
   user data and writes the `foundry-stop` document the host runs, a run can
   have the host do anything the host's role allows, including reading
-  Foundry's SecureStrings. The role's own rules don't stop that; what does is
-  that only a run Craig approves, of a plan he read from a commit on `main`,
-  holds the role.
+  Foundry's SecureStrings. Code in a run could also leave that reach behind
+  after the run: a second instance with the host's role, or a change to the
+  host's user data, which the plan ignores. No later plan would show either.
+  The role's own rules don't stop that; what does is that only a run Craig
+  approves, of a plan he read from a commit on `main`, holds the role.
 - **EC2.** Only the calls OpenTofu makes for the host, its data volume,
   Elastic IP and security group, in us-west-2, recorded from the provider's
   own requests, reads included. It reads an instance's user data, which can
@@ -108,8 +116,12 @@ plan.
 - Keep the repository private and gate the workflow by hand. Rejected by
   Craig's choice: without a required reviewer, nothing in GitHub holds a run
   for his approval.
-- The deploy role without a boundary on the roles it makes. Rejected: it
-  could make a role with any permission and then act through it.
+- The deploy role without a boundary on the roles whose policies it sets.
+  Rejected: it could give a role any permission and then act through it.
+- The deploy role making the controllers' roles inside the boundary.
+  Rejected: IAM can't limit the trust policy of a role it makes, so a run
+  could make one an outside account assumes, with the boundary's reach to
+  the host, and nothing in the infra root's state would show it.
 - The deploy role as JSON policy files created by hand, as minecraft's
   operator is. Rejected: a root with tests keeps the rules checked on every
   pull request, and the role's limits next to the code they limit.

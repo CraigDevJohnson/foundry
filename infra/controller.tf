@@ -15,6 +15,12 @@ locals {
     for environment in local.site_environments : environment => "foundry-${environment}-controller"
   }
 
+  # Each function runs as the role of the same name, which infra/bootstrap
+  # makes (ADR 0007): this root sets only its inline policy.
+  controller_role_arns = {
+    for environment, name in local.controller_names : environment => "arn:aws:iam::${local.workloads_account_id}:role/${name}"
+  }
+
   # Built from the name rather than read from the log group, so the plan shows
   # the role's whole policy before anything is created.
   controller_log_group_names = {
@@ -83,30 +89,6 @@ resource "aws_cloudwatch_log_group" "controller" {
 
   name              = local.controller_log_group_names[each.key]
   retention_in_days = 30
-}
-
-# Only Lambda may assume the role: each role trusts only its service principal
-# (aws-design §5.3). Like soccer's and The Lobby's function roles, and unlike
-# the DLM role, it has no aws:SourceAccount condition.
-data "aws_iam_policy_document" "controller_trust" {
-  statement {
-    actions = ["sts:AssumeRole"]
-
-    principals {
-      type        = "Service"
-      identifiers = ["lambda.amazonaws.com"]
-    }
-  }
-}
-
-resource "aws_iam_role" "controller" {
-  for_each = local.site_environments
-
-  name                  = local.controller_names[each.key]
-  description           = "Foundry controller for The Lobby ${each.key} site - host status, start and stop"
-  assume_role_policy    = data.aws_iam_policy_document.controller_trust.json
-  force_detach_policies = true
-  permissions_boundary  = local.workload_boundary_arn
 }
 
 # Least privilege (G7): the function writes its own log group, reads the
@@ -182,7 +164,7 @@ resource "aws_iam_role_policy" "controller" {
   for_each = local.site_environments
 
   name   = local.controller_names[each.key]
-  role   = aws_iam_role.controller[each.key].id
+  role   = local.controller_names[each.key]
   policy = data.aws_iam_policy_document.controller[each.key].json
 }
 
@@ -191,14 +173,14 @@ resource "aws_iam_role_policy" "controller" {
 resource "aws_iam_role_policies_exclusive" "controller" {
   for_each = local.site_environments
 
-  role_name    = aws_iam_role.controller[each.key].name
+  role_name    = local.controller_names[each.key]
   policy_names = [aws_iam_role_policy.controller[each.key].name]
 }
 
 resource "aws_iam_role_policy_attachments_exclusive" "controller" {
   for_each = local.site_environments
 
-  role_name   = aws_iam_role.controller[each.key].name
+  role_name   = local.controller_names[each.key]
   policy_arns = []
 }
 
@@ -207,7 +189,7 @@ resource "aws_lambda_function" "controller" {
 
   function_name = local.controller_names[each.key]
   description   = "Foundry host status, start and stop for The Lobby ${each.key} site"
-  role          = aws_iam_role.controller[each.key].arn
+  role          = local.controller_role_arns[each.key]
 
   # `task build` writes the same zip for the same source, so an unchanged
   # build plans no change.

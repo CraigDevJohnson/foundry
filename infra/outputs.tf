@@ -31,11 +31,6 @@ output "security_group_id" {
   value       = aws_security_group.foundry.id
 }
 
-output "host_control_role_arn" {
-  description = "The role the Host control workflow assumes (GitHub variable AWS_HOST_CONTROL_ROLE_ARN)."
-  value       = aws_iam_role.host_control.arn
-}
-
 output "controller_urls" {
   description = "Per Lobby site environment, the controller's Function URL: what the-lobby's foundry_backend_url takes for that environment."
   value       = { for environment, url in aws_lambda_function_url.controller : environment => url.function_url }

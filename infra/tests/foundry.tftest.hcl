@@ -45,12 +45,6 @@ mock_provider "aws" {
     }
   }
 
-  mock_data "aws_iam_openid_connect_provider" {
-    defaults = {
-      arn = "arn:aws:iam::793680745829:oidc-provider/token.actions.githubusercontent.com"
-    }
-  }
-
   mock_resource "aws_instance" {
     defaults = {
       id  = "i-0123456789abcdef0"
@@ -318,17 +312,19 @@ run "status_alarm_targets_workloads_alerts" {
 
 # --- GitHub Actions host control ---
 
-run "host_control_role_trusts_only_the_environment" {
+# infra/bootstrap makes the role and owns its trust policy, which its tests
+# check (ADR 0007).
+run "host_control_role_is_least_privilege" {
   command = plan
 
   assert {
-    condition = jsonencode({
-      for c in data.aws_iam_policy_document.host_control_trust.statement[0].condition : c.variable => [c.test, c.values]
-      }) == jsonencode({
-      "token.actions.githubusercontent.com:aud" = ["StringEquals", ["sts.amazonaws.com"]]
-      "token.actions.githubusercontent.com:sub" = ["StringEquals", ["repo:CraigDevJohnson@42454849/foundry@1361164956:environment:foundry-host"]]
-    })
-    error_message = "The host control role must require the STS audience and pin the immutable sub to the foundry-host environment."
+    condition = (
+      aws_iam_role_policy.host_control.role == "foundry-host-control-ci" &&
+      toset(aws_iam_role_policies_exclusive.host_control.policy_names) == toset(["foundry-host-control"]) &&
+      aws_iam_role_policies_exclusive.host_control.role_name == "foundry-host-control-ci" &&
+      length(aws_iam_role_policy_attachments_exclusive.host_control.policy_arns) == 0
+    )
+    error_message = "foundry-host-control-ci keeps only its own inline policy and no managed policies."
   }
 
   assert {
@@ -358,18 +354,24 @@ run "host_control_role_trusts_only_the_environment" {
 
 # --- The Deploy workflow (ADR 0007) ---
 
-# The deploy role may create or change a role only while it carries the
-# boundary infra/bootstrap makes, so every role it manages carries it. The
-# host's role and the snapshot role are left to Craig's admin profile.
-run "deploy_managed_roles_carry_the_boundary" {
+# The deploy role never makes a role or changes who may assume one: the
+# controllers and the Host control role come from infra/bootstrap, inside the
+# boundary, and this root sets only their inline policies. The host's role and
+# the snapshot role are left to Craig's admin profile.
+run "the_root_makes_only_the_admin_roles" {
   command = plan
 
   assert {
+    condition     = toset([for r in [aws_iam_role.host, aws_iam_role.host_dlm] : r.name]) == toset(["foundry-host", "foundry-dlm"])
+    error_message = "The only roles this root makes are foundry-host and foundry-dlm, which only Craig's admin profile changes."
+  }
+
+  assert {
     condition = alltrue([
-      for role in concat([aws_iam_role.host_control], values(aws_iam_role.controller)) :
-      role.permissions_boundary == "arn:aws:iam::793680745829:policy/foundry-workload-boundary"
+      for environment in ["dev", "prod"] :
+      aws_lambda_function.controller[environment].role == "arn:aws:iam::793680745829:role/foundry-${environment}-controller"
     ])
-    error_message = "The controllers and the Host control role must carry foundry-workload-boundary."
+    error_message = "Each controller runs as the role of its own name, which infra/bootstrap makes."
   }
 
   assert {
@@ -402,7 +404,6 @@ run "controller_names_carry_the_site_environment" {
     condition = alltrue([
       for environment in ["dev", "prod"] : (
         aws_lambda_function.controller[environment].function_name == "foundry-${environment}-controller" &&
-        aws_iam_role.controller[environment].name == "foundry-${environment}-controller" &&
         aws_cloudwatch_log_group.controller[environment].name == "/aws/lambda/foundry-${environment}-controller" &&
         aws_cloudwatch_metric_alarm.controller_failing[environment].alarm_name == "foundry-${environment}-controller-failing"
       )
@@ -551,19 +552,12 @@ run "controller_role_is_least_privilege" {
   }
 
   assert {
-    condition = (
-      one(data.aws_iam_policy_document.controller_trust.statement[0].principals).identifiers == toset(["lambda.amazonaws.com"]) &&
-      length(data.aws_iam_policy_document.controller_trust.statement) == 1
-    )
-    error_message = "Only Lambda may assume the controller role."
-  }
-
-  assert {
     condition = alltrue([
       for environment in ["dev", "prod"] : (
         toset(aws_iam_role_policies_exclusive.controller[environment].policy_names) == toset(["foundry-${environment}-controller"]) &&
         length(aws_iam_role_policy_attachments_exclusive.controller[environment].policy_arns) == 0 &&
-        aws_iam_role_policy.controller[environment].role == aws_iam_role.controller[environment].id
+        aws_iam_role_policy.controller[environment].role == "foundry-${environment}-controller" &&
+        aws_iam_role_policies_exclusive.controller[environment].role_name == "foundry-${environment}-controller"
       )
     ])
     error_message = "Each controller role keeps only its own inline policy and no managed policies."

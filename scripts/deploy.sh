@@ -63,7 +63,9 @@ trap 'rm -rf "$work"' EXIT
 out="$work/output"
 
 # deploy.tfvars sets no named profile, so the backend and the provider use the
-# credentials in the environment. The backend reads it at init too.
+# credentials in the environment. The backend reads it at init too. The deploy
+# role can write the state, so init installs only the providers in the lock
+# file, never one that only the state names (infra/README.md).
 "$tofu" -chdir="$root_dir/infra" init -input=false -no-color -lockfile=readonly \
 	-var-file=deploy.tfvars
 

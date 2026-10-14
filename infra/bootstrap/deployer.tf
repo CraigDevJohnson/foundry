@@ -1,6 +1,6 @@
 # The role the Deploy workflow (.github/workflows/deploy.yml) applies the
-# infra root as, and the permissions boundary every role that root may create
-# or change must carry (ADR 0007).
+# infra root as, and the permissions boundary on every role whose policy that
+# root may change (ADR 0007).
 #
 # GitHub signs a short-lived OpenID Connect token for each job. AWS trusts that
 # token through the account's GitHub provider, which aws-setup owns, and hands
@@ -8,9 +8,11 @@
 # (aws-design §5.6, G2).
 
 locals {
-  # GitHub's immutable OIDC subject for this repository (infra/ci.tf explains
-  # the owner@id/repo@id form), pinned to the Deploy workflow's environment.
-  # Only main may deploy to it, and Craig approves every run in GitHub.
+  # GitHub's immutable OIDC subject for this repository: it was created after
+  # GitHub's 2026-07-15 cutover, so `sub` carries the owner and repository IDs
+  # (owner@id/repo@id), which a transfer or rename keeps. The deploy role pins
+  # it to the Deploy workflow's environment, which only main may deploy to,
+  # and Craig approves every run in GitHub.
   github_repository  = "CraigDevJohnson@42454849/foundry@1361164956"
   deploy_environment = "deploy"
 
@@ -25,16 +27,18 @@ locals {
 
   boundary_name = "foundry-workload-boundary"
 
-  # The roles the deploy role may create or change, always inside the
-  # boundary: the controllers (controller.tf) and the Host control role
-  # (ci.tf). The host's role and the snapshot role carry policies the
-  # boundary doesn't cover, so the deploy role may hand them to EC2 and Data
-  # Lifecycle Manager but never change them. Its own name, foundry-deployer,
-  # matches none of these.
-  bounded_roles = [
-    "arn:aws:iam::${local.account}:role/foundry-*-controller",
-    "arn:aws:iam::${local.account}:role/foundry-host-control-ci",
+  # The roles whose inline policies the deploy role may set, always inside
+  # the boundary: the controllers and the Host control role, which roles.tf
+  # makes. It never makes a role or changes who may assume one. The host's
+  # role and the snapshot role carry policies the boundary doesn't cover, so
+  # the deploy role may hand them to EC2 and Data Lifecycle Manager but never
+  # change them.
+  controller_role_arns = [
+    for name in values(local.controller_role_names) : "arn:aws:iam::${local.account}:role/${name}"
   ]
+  bounded_roles = concat(local.controller_role_arns, [
+    "arn:aws:iam::${local.account}:role/${local.host_control_role_name}",
+  ])
   foundry_roles = "arn:aws:iam::${local.account}:role/foundry-*"
 
   functions = [
@@ -137,8 +141,8 @@ data "aws_iam_openid_connect_provider" "github" {
 }
 
 # ---------------------------------------------------------------------------
-# The most a role the deploy role makes may ever do, whatever its own policy
-# says: what the controllers and the Host control role need, on hosts tagged
+# The most the controllers and the Host control role may ever do, whatever
+# inline policy a deploy gives them: what the controllers and the Host control role need, on hosts tagged
 # project=foundry and Foundry's own documents and log groups. Nothing here
 # reads a parameter, decrypts, or changes IAM.
 
@@ -259,8 +263,8 @@ resource "aws_iam_role" "deployer" {
 
 # Everything a plan and apply of the infra root needs. Each service is pinned
 # to Foundry's names or tags wherever the action allows it. Fixed rules hold
-# whatever a commit says: a role is made or given a policy only inside the
-# boundary, which stays on; a Function URL is AWS_IAM only and a call is
+# whatever a commit says: it never makes a role or changes who may assume
+# one, and gives a role a policy only inside the boundary, which stays on; a Function URL is AWS_IAM only and a call is
 # granted only to The Lobby's site roles; alarms and the stop rule notify
 # only the alerts topic; and nothing reads a parameter or secret.
 data "aws_iam_policy_document" "deployer" {
@@ -626,16 +630,15 @@ data "aws_iam_policy_document" "deployer" {
     }
   }
 
-  # IAM. A controller or the Host control role is made, or given a policy or
-  # a boundary, only while it carries the boundary.
+  # IAM. The controllers' and the Host control role's inline policies are set
+  # only while the role carries the boundary. Nothing else about a role: no
+  # CreateRole, UpdateAssumeRolePolicy or DeleteRole (roles.tf), and no
+  # managed policy.
   statement {
     sid = "RolesInsideBoundary"
     actions = [
-      "iam:AttachRolePolicy",
-      "iam:CreateRole",
       "iam:DeleteRolePolicy",
       "iam:DetachRolePolicy",
-      "iam:PutRolePermissionsBoundary",
       "iam:PutRolePolicy",
     ]
     resources = local.bounded_roles
@@ -648,19 +651,6 @@ data "aws_iam_policy_document" "deployer" {
   }
 
   statement {
-    sid = "BoundedRoles"
-    actions = [
-      "iam:DeleteRole",
-      "iam:TagRole",
-      "iam:UntagRole",
-      "iam:UpdateAssumeRolePolicy",
-      "iam:UpdateRole",
-      "iam:UpdateRoleDescription",
-    ]
-    resources = local.bounded_roles
-  }
-
-  statement {
     sid    = "BoundaryStays"
     effect = "Deny"
     actions = [
@@ -669,7 +659,7 @@ data "aws_iam_policy_document" "deployer" {
     resources = ["*"]
   }
 
-  # It makes and changes roles but never becomes one, even a role whose trust
+  # It changes roles' policies but never becomes one, even a role whose trust
   # policy names it: a trust policy that names a role in the same account
   # needs no allow from that role's own policy.
   statement {
@@ -698,25 +688,11 @@ data "aws_iam_policy_document" "deployer" {
     ]
   }
 
-  # The GitHub provider ci.tf looks up. Finding it by URL lists the account's
-  # providers.
-  statement {
-    sid       = "GitHubProviderList"
-    actions   = ["iam:ListOpenIDConnectProviders"]
-    resources = ["*"]
-  }
-
-  statement {
-    sid       = "GitHubProviderRead"
-    actions   = ["iam:GetOpenIDConnectProvider"]
-    resources = ["arn:aws:iam::${local.account}:oidc-provider/*"]
-  }
-
   # Each role goes only to the service that uses it.
   statement {
     sid       = "PassControllerRolesToLambda"
     actions   = ["iam:PassRole"]
-    resources = ["arn:aws:iam::${local.account}:role/foundry-*-controller"]
+    resources = local.controller_role_arns
 
     condition {
       test     = "StringEquals"

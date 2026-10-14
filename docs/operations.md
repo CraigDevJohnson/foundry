@@ -79,10 +79,10 @@ with the host.
 The **Host control** workflow in GitHub Actions runs the same tasks. Start it
 from the Actions tab, pick `status`, `start` or `stop`, and for `stop` tick
 **nobody playing**. It runs in the `foundry-host` GitHub Environment and
-assumes `foundry-host-control-ci` (`infra/ci.tf`) through the workloads GitHub
-OIDC provider. The role can only describe instances, start and stop this
-instance, and run the `foundry-shutdown` document on it, never arbitrary
-commands. Setup, once the role is applied:
+assumes `foundry-host-control-ci` through the workloads GitHub OIDC provider.
+`infra/bootstrap/roles.tf` makes the role and `infra/ci.tf` sets what it may
+do: only describe instances, start and stop this instance, and run the
+`foundry-shutdown` document on it, never arbitrary commands. Setup, once the role is applied:
 
 1. Create the `foundry-host` environment under the repository's
    Settings > Environments. Set **Deployment branches** to `main` only: the
@@ -91,7 +91,7 @@ commands. Setup, once the role is applied:
    required reviewers: runs start without an approval step (Craig's call,
    2026-10-09).
 2. Add the variable `AWS_HOST_CONTROL_ROLE_ARN` with the value of
-   `tofu -chdir=infra output -raw host_control_role_arn`.
+   `tofu -chdir=infra/bootstrap output -raw host_control_role_arn`.
 
 ## DNS
 
