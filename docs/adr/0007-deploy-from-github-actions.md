@@ -28,11 +28,16 @@ actions, the object it acts on, its planned values, any import or move into
 it and each changed output, and leaves out
 what only describes the present, so starting or stopping Foundry between the
 two runs doesn't change it unless the plan changes the host. A host rebuild
-(`-replace=aws_instance.host`) is a Deploy option the digest covers too.
+(`-replace=aws_instance.host`) is a Deploy option the digest covers too. An
+apply that replaces or removes the host runs only while EC2 reports it
+stopped, so Foundry's own clean shutdown (Host control's stop) has run
+first; EC2's stop before the data volume detaches doesn't run it.
 
 The repository is public, so its run logs are too. Only the resource
 headers, the progress lines without their `[id=...]` suffix and the totals
 reach the log and the summary; attribute values stay in a file on the runner.
+To read the values, Craig runs the same plan from the same commit on his
+computer, where `scripts/deploy.sh` prints the whole plan.
 
 ## The deploy role
 
@@ -74,10 +79,12 @@ What it may do is set by rules that hold whatever a commit to `main` says:
   resource already tagged `project=foundry`. It sets that tag only on a
   resource it is creating. It can make no other kind of EC2 resource, and
   never changes the default VPC's network, a network interface's security
-  groups, a snapshot, an image or an account-wide EC2 setting. A host's
-  network interface carries no tag to check, so the one call that names one,
-  associating an Elastic IP, could move Foundry's address onto another
-  host's interface, though never another address.
+  groups, a snapshot, an image or an account-wide EC2 setting. EC2 checks no
+  tag on a network interface in the two calls that can name an existing
+  one. So associating an Elastic IP could move Foundry's address onto
+  another host's interface, though never another address, and launching a
+  host could use another workload's unattached interface, taking its
+  address and security groups.
 - **The rest.** Only `foundry-*` functions, log groups, alarms and documents
   and the `foundry-stop-failed` rule. A Function URL may only be `AWS_IAM`,
   an invoke grant may name only The Lobby's `site-dev-server` and

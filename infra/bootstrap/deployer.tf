@@ -295,7 +295,9 @@ data "aws_iam_policy_document" "deployer" {
   }
 
   # The rest of what a create names: the host's subnet, AMI and primary
-  # network interface, and the VPC its security group goes in.
+  # network interface, and the VPC its security group goes in. EC2 checks no
+  # tag on an interface here, so a launch could also name another workload's
+  # unattached interface (ADR 0007).
   statement {
     sid     = "CreateInTheSharedNetwork"
     actions = ["ec2:CreateSecurityGroup", "ec2:RunInstances"]

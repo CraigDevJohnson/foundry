@@ -4,10 +4,13 @@
 # Runs the infra root the way the Deploy workflow (.github/workflows/deploy.yml)
 # does, with the AWS credentials in the environment and infra/deploy.tfvars,
 # after `task build` has written dist/bootstrap.zip. The repository is public,
-# so the full plan and apply output goes to a file, not the log: only the
-# resource headers, the progress lines and the totals reach the log and the
-# job summary, and the progress lines lose their "[id=...]" suffix. OpenTofu's
-# own errors still reach the log, because they're written to stderr.
+# so in GitHub Actions the full plan and apply output goes to a file, not the
+# log: only the resource headers, the progress lines and the totals reach the
+# log and the job summary, and the progress lines lose their "[id=...]" suffix.
+# OpenTofu's own errors still reach the log, because they're written to
+# stderr. Run anywhere else, such as on Craig's computer, it also prints the
+# full output, so he can read the values a Deploy run leaves out
+# (infra/README.md).
 #
 # Every plan ends with its digest (cmd/plandigest), which covers the plan and
 # the commit it was made from. An apply run plans again and applies only when
@@ -18,7 +21,10 @@
 #
 # REBUILD_HOST=true plans the host's replacement (-replace=aws_instance.host),
 # which keeps the data volume and the Elastic IP. The digest covers it, so the
-# apply run must ask for it too.
+# apply run must ask for it too. A plan that replaces or destroys the host
+# applies only while the host is stopped, so Foundry has shut down cleanly
+# first: EC2's stop before the volume detaches doesn't run Foundry's own
+# shutdown.
 set -euo pipefail
 
 root_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)"
@@ -74,6 +80,10 @@ report() {
 		printf '## OpenTofu %s\n\n' "$1"
 		printf '%s\n' "\`\`\`text" "${trimmed:-(nothing to report)}" "\`\`\`"
 	} | tee -a "${GITHUB_STEP_SUMMARY:-/dev/null}"
+	if [[ "${GITHUB_ACTIONS:-}" != true ]]; then
+		printf '\n## Full OpenTofu %s (not in GitHub Actions)\n\n' "$1"
+		cat "$out"
+	fi
 }
 
 status=0
@@ -84,8 +94,15 @@ if [[ "$status" -ne 0 ]]; then
 	printf '::error::tofu plan failed (exit %s); see the messages above\n' "$status" >&2
 	exit "$status"
 fi
-if ! digest="$("$tofu" -chdir="$root_dir/infra" show -json "$work/tfplan" | (cd "$root_dir" && go run ./cmd/plandigest -commit "$commit"))"; then
+if ! "$tofu" -chdir="$root_dir/infra" show -json "$work/tfplan" >"$work/plan.json" ||
+	! digest="$(cd "$root_dir" && go run ./cmd/plandigest -commit "$commit" <"$work/plan.json")"; then
 	printf '::error::the saved plan could not be read for its digest\n' >&2
+	exit 1
+fi
+# What EC2 reported for the host at the plan's refresh, when the plan replaces
+# or destroys it; empty when it doesn't.
+if ! host_state="$(jq -r 'first(.resource_changes[]? | select(.address == "aws_instance.host" and (.change.actions | index("delete"))) | (.change.before.instance_state // "unknown")) // empty' "$work/plan.json")"; then
+	printf '::error::the saved plan could not be read for the host'"'"'s state\n' >&2
 	exit 1
 fi
 printf "\nPlan digest: \`%s\` (commit \`%s\`)\n" "$digest" "${commit:0:12}" | tee -a "${GITHUB_STEP_SUMMARY:-/dev/null}"
@@ -93,10 +110,22 @@ rebuild_note=""
 if [[ ${#plan_args[@]} -gt 0 ]]; then
 	rebuild_note=", with rebuild host checked"
 fi
+host_note=""
+if [[ -n "$host_state" && "$host_state" != stopped ]]; then
+	host_note="$(printf "This plan replaces or removes the host, which is \`%s\`. Stop it first with Host control's stop, which shuts Foundry down cleanly, and run the apply once the host is \`stopped\`: an apply refuses to replace a host that isn't stopped." "$host_state")"
+fi
 if [[ "$mode" == plan ]]; then
+	if [[ -n "$host_note" ]]; then
+		printf '\n%s\n' "$host_note" | tee -a "${GITHUB_STEP_SUMMARY:-/dev/null}"
+	fi
 	printf "\nTo apply exactly this plan, run Deploy again with mode \`apply\` and plan \`%s\`%s.\n" "$digest" "$rebuild_note" |
 		tee -a "${GITHUB_STEP_SUMMARY:-/dev/null}"
 	exit 0
+fi
+if [[ -n "$host_note" ]]; then
+	printf '\nNothing was applied. %s\n' "$host_note" | tee -a "${GITHUB_STEP_SUMMARY:-/dev/null}"
+	printf '::error::the plan replaces or removes a host that is not stopped; nothing was applied\n' >&2
+	exit 1
 fi
 if [[ "$digest" != "$approved" ]]; then
 	printf "\nNothing was applied: this plan (digest \`%s\`) is not the plan you approved (\`%s\`), because main or the state changed since. Read the plan above; to apply it, run Deploy with mode \`apply\` and plan \`%s\`%s.\n" \

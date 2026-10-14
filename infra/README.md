@@ -68,6 +68,12 @@ Run **Actions › Deploy › Run workflow** on `main`:
    made from, are the ones you read; if `main` or the state changed since,
    it applies nothing and posts the new plan and digest.
 
+The summary shows which resources change and how, but not their values,
+because the repository's logs are public. To read the values, run the same
+plan on your computer from the same commit of `main`: `task build`, then
+`AWS_PROFILE=workloads-admin scripts/deploy.sh plan`. Outside GitHub Actions
+it also prints the full plan, and it changes nothing.
+
 **Rebuild host** replaces the host's instance (see [Rebuilding the host](#rebuilding-the-host)).
 Check it on both runs: the digest covers it.
 
@@ -190,6 +196,11 @@ instance ID. [Operations](../docs/operations.md#snapshot-before-an-upgrade)
 covers stopping Foundry first and deleting the snapshot afterwards.
 
 ## Rebuilding the host
+
+Stop the host first with Host control's stop, which shuts Foundry down
+cleanly. EC2's own stop, which runs before the data volume detaches, doesn't
+run Foundry's shutdown, so an apply that replaces or removes a host that
+isn't `stopped` applies nothing (`scripts/deploy.sh`); a plan says so.
 
 A Deploy plan with **Rebuild host** checked (`-replace=aws_instance.host`)
 keeps the data volume and the Elastic IP (both have `prevent_destroy`), and
