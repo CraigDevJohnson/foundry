@@ -151,8 +151,11 @@ are ignored. Anything else answers `400` with
   recorded on the host, could not be read: a second stop could overlap the
   first, so none is sent. `{"code": "stop_failed"}` when Systems Manager
   refused the command for another reason or its answer didn't arrive in time.
-  The command may have been sent then, and `checks.stop` shows it if so.
-  Nothing is retried, so a lost answer never sends a second stop.
+  The command may have been sent then, but without its ID the controller
+  can't record it, so `checks.stop` doesn't show it and the status follows
+  the host until it powers off. The controller retries nothing; a second
+  stop the Member asks for waits on the host for the first and ends the same
+  way.
 
 A stop takes no backup; it is not End session. The command has a 60-second
 delivery timeout and gives the shutdown 5 minutes to run. AWS's documentation
