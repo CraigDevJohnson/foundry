@@ -10,9 +10,9 @@ and its host.
 _Avoid_: Foundry VTT (when referring to management tools)
 
 **Controller**:
-The management plane's backend: the Lambda function The Lobby's `/foundry`
-page calls for the host's status. One runs for each Lobby site environment.
-It only reads; starting and stopping the host are not part of it yet.
+The management plane's backend: the Lambda function The Lobby's site calls for
+the host's status and, for Members with Foundry Admin, to start the host or
+send it the stop. One runs for each Lobby site environment.
 
 **Foundry VTT**:
 Foundry Virtual Tabletop, the application Craig hosts for tabletop play.

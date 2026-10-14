@@ -26,7 +26,15 @@ func (f startFunc) StartInstances(ctx context.Context, in *ec2.StartInstancesInp
 
 type sendFunc func(context.Context, *ssm.SendCommandInput) (*ssm.SendCommandOutput, error)
 
-func (f sendFunc) SendCommand(ctx context.Context, in *ssm.SendCommandInput, _ ...func(*ssm.Options)) (*ssm.SendCommandOutput, error) {
+// SendCommand fails the stop unless it is sent with retries turned off.
+func (f sendFunc) SendCommand(ctx context.Context, in *ssm.SendCommandInput, optFns ...func(*ssm.Options)) (*ssm.SendCommandOutput, error) {
+	options := ssm.Options{RetryMaxAttempts: 2}
+	for _, fn := range optFns {
+		fn(&options)
+	}
+	if options.RetryMaxAttempts != 1 {
+		return nil, errors.New("the stop could be sent more than once")
+	}
 	return f(ctx, in)
 }
 

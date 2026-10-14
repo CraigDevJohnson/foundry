@@ -22,7 +22,8 @@ that environment's site role, `site-<env>-server`. The site signs each request
 an unsigned request gets `403` from AWS and never reaches the controller.
 
 The controller does no sign-in of its own. The site checks the Member's grant
-before it calls: `foundry` for the status, `foundry-admin` for start and stop.
+before it calls: `foundry` or `foundry-admin` for the status, and
+`foundry-admin` alone for start and stop.
 Those grants are the gate on which Members see the status and change the
 host. The site names the Member in the `X-Lobby-Member` header. Reads ignore it
 and never log it. Start and stop log it as who asked, but only when the
@@ -106,8 +107,9 @@ Starts a stopped host. The body is ignored.
   stopped yet. Start it once it is `stopped`.
 - `404` with `{"code": "no_server"}` as for `GET /server`.
 - `503` with `{"code": "status_unknown"}` when EC2's state could not be read,
-  or `{"code": "start_failed"}` when EC2 refused the start for another reason.
-  Nothing is retried.
+  or `{"code": "start_failed"}` when EC2 refused the start for another reason
+  or its answer didn't arrive in time. The start may have happened then, and
+  the status shows it if so. Nothing is retried.
 
 ## `POST /server/stop`
 
@@ -129,8 +131,10 @@ are ignored. Anything else answers `400` with
   shutdown fails, the host stays on, `checks.stop` turns `failed` and the
   state follows the host again.
 - `200` with the current status when there is nothing to stop: the host is
-  already `stopped` or `stopping`, or a stop is under way. Repeated requests
-  end on the same stop.
+  already `stopped` or `stopping`, or a stop is under way. So a stop requested
+  after another was sent answers this way and sends nothing; two requests at
+  the same moment can each send one, and the second finds Foundry already
+  down.
 - `409` with `{"code": "starting"}` while EC2 reports the host `pending`.
   Stop it once it is running.
 - `409` with `{"code": "agent_offline"}` when the host has no connected
@@ -140,7 +144,9 @@ are ignored. Anything else answers `400` with
 - `503` with `{"code": "status_unknown"}` when EC2's state, or the stops sent
   since the host started, could not be read: a second stop could overlap the
   first, so none is sent. `{"code": "stop_failed"}` when Systems Manager
-  refused the command for another reason. Nothing is retried.
+  refused the command for another reason or its answer didn't arrive in time.
+  The command may have been sent then, and `checks.stop` shows it if so.
+  Nothing is retried, so a lost answer never sends a second stop.
 
 A stop takes no backup; it is not End session. The command has a 60-second
 delivery timeout and gives the shutdown 5 minutes to run. AWS's documentation
@@ -181,9 +187,12 @@ Every answer carries `Cache-Control: no-store`, and every JSON body
 2. If EC2 reports it `running`, at the same time and independently of each
    other: Systems Manager `DescribeInstanceInformation` for that instance, an
    HTTPS `GET` of the join page, and Systems Manager `ListCommands` for the
-   `foundry-stop` commands sent to that instance since EC2's `LaunchTime`. The
-   latest one decides `checks.stop`. A record for another document or from
-   before that time, or more than one page of them, is `unknown`.
+   `foundry-stop` commands sent since EC2's `LaunchTime`. They are listed by
+   document and time, not by instance, because Systems Manager may not list a
+   stop against the instance before it reaches the agent. Commands sent to
+   other instances are skipped; the latest one sent to this one decides
+   `checks.stop`. A record for another document, from before that time, sent
+   by tag or to no instance, or more than one page of them, is `unknown`.
 
 They are taken during one request, not as an atomic snapshot. The whole
 observation is bounded at 6 seconds, because the site's client gives up at 7
@@ -255,7 +264,11 @@ The three required settings default to `us-west-2`, the host found by its
 `Name=foundry` and `project=foundry` tags, and the join page; set any of them
 to override it. `POST /server/start` and `POST /server/stop` change the real
 host with your credentials, so they need an admin profile and Craig's approval
-like any other change; `workloads-readonly` is refused. `FOUNDRY_ADDR` changes the address. The Lobby's site can't
+like any other change; `workloads-readonly` is refused. `FOUNDRY_ADDR` changes the address.
+The local server answers only requests addressed to `localhost` or an IP
+address (`421` with `{"code": "not_local"}` otherwise) and refuses a browser's
+cross-origin `POST` with `403`, so a web page open on your computer can't use
+your credentials through it; curl is unaffected. The Lobby's site can't
 call it from a developer's computer: sign-in is disabled there, so the site's
 `/api/foundry/server` answers `401` before it calls any backend. Ask the
 controller directly, as above.

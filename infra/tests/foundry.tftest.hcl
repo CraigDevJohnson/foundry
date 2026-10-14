@@ -77,14 +77,6 @@ mock_provider "aws" {
   }
 }
 
-# Every document gets the mock's foundry-shutdown ARN otherwise.
-override_resource {
-  target = aws_ssm_document.stop
-  values = {
-    arn = "arn:aws:ssm:us-west-2:793680745829:document/foundry-stop"
-  }
-}
-
 # The controller's zip comes from `task build`, which the offline checks don't
 # run. The fixture stands in for it.
 variables {
@@ -632,11 +624,23 @@ run "stop_document_shuts_foundry_down_then_powers_off" {
       jsondecode(aws_ssm_document.stop.content).mainSteps[0].action == "aws:runShellScript" &&
       jsondecode(aws_ssm_document.stop.content).mainSteps[0].inputs.timeoutSeconds == "300" &&
       jsondecode(aws_ssm_document.stop.content).mainSteps[0].inputs.runCommand == [
-        file("templates/foundry-shutdown.sh"),
-        file("templates/foundry-power-off.sh"),
+        templatefile("templates/foundry-stop.sh.tftpl", {
+          shutdown_script = file("templates/foundry-shutdown.sh")
+          power_off       = file("templates/foundry-power-off.sh")
+        })
       ]
     )
-    error_message = "foundry-stop runs the same shutdown as foundry-shutdown and then the power-off, as one script, so the power-off runs only if the shutdown reached its end."
+    error_message = "foundry-stop is one script built from the stop template, the shutdown script and the power-off."
+  }
+
+  assert {
+    condition = (
+      strcontains(
+        jsondecode(aws_ssm_document.stop.content).mainSteps[0].inputs.runCommand[0],
+        "<<'FOUNDRY_SHUTDOWN_SCRIPT'\n${file("templates/foundry-shutdown.sh")}FOUNDRY_SHUTDOWN_SCRIPT\n\nif ! bash \"$shutdown\"; then\n  echo \"The shutdown failed; leaving the host running\" >&2\n  exit 1\nfi\n\n${file("templates/foundry-power-off.sh")}"
+      )
+    )
+    error_message = "foundry-stop must run the shutdown script whole, from its own file, and power off only if it exits 0."
   }
 
   assert {

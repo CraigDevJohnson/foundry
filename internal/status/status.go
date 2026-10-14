@@ -8,6 +8,7 @@ package status
 import (
 	"context"
 	"errors"
+	"slices"
 	"sync"
 	"time"
 
@@ -208,7 +209,10 @@ func (s *Service) agent(ctx context.Context) SSMObservation {
 
 // stop finds the latest stop sent to the host since EC2 last started it, so a
 // stop from an earlier run never counts. Without a start time there is no
-// such bound, and nothing is guessed.
+// such bound, and nothing is guessed. The commands are listed by document and
+// time, not by instance: Systems Manager may list a command against an
+// instance only once it reaches the instance, and a stop still pending must
+// count. Each one names the instances it was sent to.
 func (s *Service) stop(ctx context.Context, launched time.Time) StopObservation {
 	if launched.IsZero() {
 		return StopObservation{Observation: Observation{State: "not_checked", Reason: "no_launch_time"}}
@@ -216,7 +220,6 @@ func (s *Service) stop(ctx context.Context, launched time.Time) StopObservation 
 	ctx, cancel := context.WithTimeout(ctx, ProviderTimeout)
 	defer cancel()
 	output, err := s.Commands.ListCommands(ctx, &ssm.ListCommandsInput{
-		InstanceId: aws.String(s.Config.InstanceID),
 		Filters: []ssmtypes.CommandFilter{
 			{Key: ssmtypes.CommandFilterKeyDocumentName, Value: aws.String(StopDocument)},
 			{Key: ssmtypes.CommandFilterKeyInvokedAfter, Value: aws.String(launched.UTC().Format(time.RFC3339))},
@@ -232,8 +235,12 @@ func (s *Service) stop(ctx context.Context, launched time.Time) StopObservation 
 	var latest *ssmtypes.Command
 	for i := range output.Commands {
 		command := &output.Commands[i]
-		if aws.ToString(command.DocumentName) != StopDocument || command.RequestedDateTime == nil || command.RequestedDateTime.Before(launched) {
+		if aws.ToString(command.DocumentName) != StopDocument || command.RequestedDateTime == nil || command.RequestedDateTime.Before(launched) ||
+			len(command.Targets) != 0 || len(command.InstanceIds) == 0 {
 			return StopObservation{Observation: Observation{State: "unknown", Reason: "unexpected_record"}}
+		}
+		if !slices.Contains(command.InstanceIds, s.Config.InstanceID) {
+			continue
 		}
 		if latest == nil || command.RequestedDateTime.After(*latest.RequestedDateTime) {
 			latest = command

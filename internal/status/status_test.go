@@ -45,7 +45,7 @@ func (f commandsFunc) ListCommands(ctx context.Context, in *ssm.ListCommandsInpu
 
 // stopCommand is a stop sent to the host at requested, in the given state.
 func stopCommand(status ssmtypes.CommandStatus, requested time.Time) ssmtypes.Command {
-	return ssmtypes.Command{CommandId: aws.String("c-" + requested.Format("150405")), DocumentName: aws.String(StopDocument), RequestedDateTime: aws.Time(requested), Status: status}
+	return ssmtypes.Command{CommandId: aws.String("c-" + requested.Format("150405")), DocumentName: aws.String(StopDocument), InstanceIds: []string{testInstanceID}, RequestedDateTime: aws.Time(requested), Status: status}
 }
 
 func hostOutput(state string) *ec2.DescribeInstancesOutput {
@@ -92,15 +92,16 @@ func testService(t *testing.T) *Service {
 	}
 }
 
-// checkStopQuery fails the test unless the stops are asked for only this host,
-// only the stop document and only since EC2 last started the host.
+// checkStopQuery fails the test unless the stops are asked for by the stop
+// document and the time EC2 last started the host, and not by instance, which
+// could leave out a stop still pending.
 func checkStopQuery(t *testing.T, in *ssm.ListCommandsInput) {
 	t.Helper()
 	filters := map[ssmtypes.CommandFilterKey]string{}
 	for _, filter := range in.Filters {
 		filters[filter.Key] = aws.ToString(filter.Value)
 	}
-	if aws.ToString(in.InstanceId) != testInstanceID || in.CommandId != nil || len(in.Filters) != 2 ||
+	if in.InstanceId != nil || in.CommandId != nil || len(in.Filters) != 2 ||
 		filters[ssmtypes.CommandFilterKeyDocumentName] != StopDocument ||
 		filters[ssmtypes.CommandFilterKeyInvokedAfter] != "2026-10-13T18:00:00Z" {
 		t.Errorf("unscoped ListCommands input: %+v", in)
@@ -349,6 +350,15 @@ func TestStopsUnderWay(t *testing.T) {
 	undated.RequestedDateTime = nil
 	paginated := commands(stopCommand(ssmtypes.CommandStatusSuccess, late))
 	paginated.NextToken = aws.String("more")
+	elsewhere := stopCommand(ssmtypes.CommandStatusInProgress, late)
+	elsewhere.InstanceIds = []string{"i-fffffffffffffffff"}
+	alongside := stopCommand(ssmtypes.CommandStatusInProgress, late)
+	alongside.InstanceIds = []string{"i-fffffffffffffffff", testInstanceID}
+	byTag := stopCommand(ssmtypes.CommandStatusInProgress, late)
+	byTag.InstanceIds = nil
+	byTag.Targets = []ssmtypes.Target{{Key: aws.String("tag:project"), Values: []string{"foundry"}}}
+	untargeted := stopCommand(ssmtypes.CommandStatusInProgress, late)
+	untargeted.InstanceIds = nil
 	tests := []struct {
 		name          string
 		output        *ssm.ListCommandsOutput
@@ -367,6 +377,11 @@ func TestStopsUnderWay(t *testing.T) {
 		{"latest first", commands(stopCommand(ssmtypes.CommandStatusInProgress, late), stopCommand(ssmtypes.CommandStatusFailed, early)), nil, "in_progress", "observed", late},
 		{"latest last", commands(stopCommand(ssmtypes.CommandStatusFailed, early), stopCommand(ssmtypes.CommandStatusSuccess, late)), nil, "succeeded", "observed", late},
 		{"unexpected status", commands(stopCommand("Exploded", late)), nil, "unknown", "unexpected_state", late},
+		{"another instance only", commands(elsewhere), nil, "none", "observed", time.Time{}},
+		{"another instance's later stop", commands(stopCommand(ssmtypes.CommandStatusFailed, early), elsewhere), nil, "failed", "observed", early},
+		{"this and another instance", commands(alongside), nil, "in_progress", "observed", late},
+		{"sent by tag", commands(byTag), nil, "unknown", "unexpected_record", time.Time{}},
+		{"sent to nothing", commands(untargeted), nil, "unknown", "unexpected_record", time.Time{}},
 		{"another document", commands(foreign), nil, "unknown", "unexpected_record", time.Time{}},
 		{"before this start", commands(before), nil, "unknown", "unexpected_record", time.Time{}},
 		{"no time", commands(undated), nil, "unknown", "unexpected_record", time.Time{}},

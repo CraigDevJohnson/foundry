@@ -309,9 +309,10 @@ A Member with the site's `foundry-admin` grant can also start and stop the host
 through it ([ADR 0006](adr/0006-the-lobby-starts-and-stops-the-host.md),
 [status API](status-api.md)). A start is an EC2 start. A stop, once the Member
 confirms nobody is playing, sends the `foundry-stop` document: the same
-shutdown as `host:stop` (above), then a power-off a minute later, which EC2
-turns into a stop because the host's instance-initiated shutdown behavior is
-`stop`. If the shutdown fails, the host stays on, as with `host:stop`.
+shutdown as `host:stop` (above) and, only if that succeeds, a power-off a
+minute later, which EC2 turns into a stop because the host's
+instance-initiated shutdown behavior is `stop`. If the shutdown fails, the
+host stays on, as with `host:stop`.
 
 A failed, timed-out or cancelled `foundry-stop` emails through the workloads
 `alerts` topic (the `foundry-stop-failed` EventBridge rule). Foundry may then be
@@ -320,7 +321,9 @@ down while the host runs. Read the command's output, then stop it with
 command output uses `workloads-admin`, so an agent asks Craig first:
 
 ```sh
-aws ssm list-commands --document-name foundry-stop --max-results 5 --profile workloads-admin
+aws ssm list-commands --filters key=DocumentName,value=foundry-stop \
+  --query 'reverse(sort_by(Commands, &RequestedDateTime))[:5].[CommandId, Status, RequestedDateTime]' \
+  --output table --profile workloads-admin
 aws ssm get-command-invocation --command-id <id> --instance-id <instance> --profile workloads-admin
 ```
 

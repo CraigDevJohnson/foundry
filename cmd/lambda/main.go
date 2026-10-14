@@ -8,9 +8,12 @@ package main
 import (
 	"context"
 	"fmt"
+	"io"
 	"log/slog"
+	"net"
 	"net/http"
 	"os"
+	"strings"
 	"time"
 
 	"github.com/aws/aws-lambda-go/lambda"
@@ -38,7 +41,7 @@ func main() {
 		return
 	}
 	addr := listenAddr(os.Getenv)
-	srv := &http.Server{Addr: addr, Handler: handler, ReadHeaderTimeout: 5 * time.Second}
+	srv := &http.Server{Addr: addr, Handler: localOnly(handler), ReadHeaderTimeout: 5 * time.Second}
 	log.Info("listening", "addr", "http://"+addr)
 	if err := srv.ListenAndServe(); err != nil {
 		log.Error("serve", "err", err)
@@ -72,6 +75,36 @@ func newHandler(ctx context.Context, getenv func(string) string, log *slog.Logge
 	}
 	change := &control.Service{InstanceID: target.InstanceID, EC2: ec2Client, SSM: ssmClient}
 	return (&api.Handler{Status: service, Change: change, JoinURL: target.HTTPSURL, SiteSession: site, Log: log}).Router(), nil
+}
+
+// localOnly guards the local listener, which acts with the developer's own AWS
+// credentials. A request must be addressed to localhost or an IP address, so a
+// web page can't reach the listener through a domain of its own that points
+// at this computer, and a browser's cross-origin POST is refused, so a page
+// open on this computer can't start or stop the host. curl sends neither
+// browser header and is allowed.
+func localOnly(next http.Handler) http.Handler {
+	guarded := http.NewCrossOriginProtection().Handler(next)
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !localHost(r.Host) {
+			w.Header().Set("Content-Type", "application/json")
+			w.Header().Set("Cache-Control", "no-store")
+			w.WriteHeader(http.StatusMisdirectedRequest)
+			io.WriteString(w, `{"code":"not_local"}`+"\n")
+			return
+		}
+		guarded.ServeHTTP(w, r)
+	})
+}
+
+// localHost reports whether a request's Host names localhost or an IP
+// address, with or without a port.
+func localHost(host string) bool {
+	if name, _, err := net.SplitHostPort(host); err == nil {
+		host = name
+	}
+	host = strings.TrimSuffix(strings.TrimPrefix(host, "["), "]")
+	return strings.EqualFold(host, "localhost") || net.ParseIP(host) != nil
 }
 
 // listenAddr is FOUNDRY_ADDR, or 127.0.0.1:8083, beside the soccer

@@ -12,18 +12,21 @@ with its `foundry-admin` grant; its player page at `/foundry` stays status
 only.
 
 A start is one EC2 `StartInstances` on the host. A stop sends the host a new
-Systems Manager command document, `foundry-stop`. It runs the same clean
-shutdown as `task host:stop` (`templates/foundry-shutdown.sh`: stop Foundry,
-check no process is left writing its data, sync `/foundry`), then
-`templates/foundry-power-off.sh`, which schedules `shutdown --poweroff +1`.
-The host's instance-initiated shutdown behavior is `stop`, now stated in
-`host.tf`, so EC2 stops the instance and keeps its volumes and Elastic IP. If
-any part of the shutdown fails, the script exits before the power-off and the
-host keeps running, as with `task host:stop`.
+Systems Manager command document, `foundry-stop`
+(`templates/foundry-stop.sh.tftpl`). It writes the same clean shutdown as
+`task host:stop` (`templates/foundry-shutdown.sh`: stop Foundry, check no
+process is left writing its data, sync `/foundry`) to a file of its own and
+runs it, and only if that exits 0 runs `templates/foundry-power-off.sh`, which
+schedules `shutdown --poweroff +1`. The file keeps the stop script's own
+command line, which holds the shutdown's text, out of the shutdown's search
+for processes writing Foundry data. The host's instance-initiated shutdown
+behavior is `stop`, now stated in `host.tf`, so EC2 stops the instance and
+keeps its volumes and Elastic IP. If any part of the shutdown fails, the
+power-off never runs and the host keeps running, as with `task host:stop`.
 
 The controller never waits for either. It answers `202` at once, and the
 status follows the change from there: a stop sent since EC2 last started the
-host and still running, or succeeded less than 15 minutes ago, makes a running
+host and still running, or succeeded less than 15 minutes after it was sent, makes a running
 host `stopping` (`checks.stop`, read with `ssm:ListCommands`). The controller
 can't see who is playing, so a stop needs the Member's confirmation,
 `{"nobody_playing": true}`, which the site's page asks for.

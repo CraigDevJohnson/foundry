@@ -68,7 +68,9 @@ func (s *Service) Start(ctx context.Context) (string, error) {
 }
 
 // Stop sends the stop document to the host and returns the command's ID. The
-// document takes no parameters, so nothing here can change what runs.
+// document takes no parameters, so nothing here can change what runs. It is
+// sent once: SendCommand has no idempotency token, so a retry after an answer
+// that was lost could send a second stop.
 func (s *Service) Stop(ctx context.Context) (string, error) {
 	ctx, cancel := context.WithTimeout(ctx, status.ProviderTimeout)
 	defer cancel()
@@ -78,7 +80,7 @@ func (s *Service) Stop(ctx context.Context) (string, error) {
 		InstanceIds:     []string{s.InstanceID},
 		Comment:         aws.String("Stop requested through The Lobby"),
 		TimeoutSeconds:  aws.Int32(deliveryTimeoutSeconds),
-	})
+	}, func(o *ssm.Options) { o.RetryMaxAttempts = 1 })
 	if err != nil {
 		if code(err) == "InvalidInstanceId" {
 			return "", ErrAgentOffline

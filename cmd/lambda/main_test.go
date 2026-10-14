@@ -77,3 +77,41 @@ func TestListenAddress(t *testing.T) {
 		t.Fatalf("FOUNDRY_ADDR gave %q", got)
 	}
 }
+
+// The local listener answers only requests addressed to this computer, and
+// refuses a browser's cross-origin POST, while curl's requests pass.
+func TestLocalOnly(t *testing.T) {
+	handler := localOnly(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	for _, test := range []struct {
+		name, method, host string
+		header             map[string]string
+		want               int
+	}{
+		{"curl status", http.MethodGet, "127.0.0.1:8083", nil, http.StatusNoContent},
+		{"curl stop", http.MethodPost, "127.0.0.1:8083", nil, http.StatusNoContent},
+		{"localhost", http.MethodPost, "LocalHost:8083", nil, http.StatusNoContent},
+		{"IPv6", http.MethodGet, "[::1]:8083", nil, http.StatusNoContent},
+		{"no port", http.MethodGet, "127.0.0.1", nil, http.StatusNoContent},
+		{"same origin", http.MethodPost, "127.0.0.1:8083", map[string]string{"Sec-Fetch-Site": "same-origin"}, http.StatusNoContent},
+		{"another domain", http.MethodGet, "rebound.example:8083", nil, http.StatusMisdirectedRequest},
+		{"localhost subdomain", http.MethodGet, "localhost.rebound.example", nil, http.StatusMisdirectedRequest},
+		{"empty", http.MethodGet, "", nil, http.StatusMisdirectedRequest},
+		{"cross site", http.MethodPost, "127.0.0.1:8083", map[string]string{"Sec-Fetch-Site": "cross-site"}, http.StatusForbidden},
+		{"other origin", http.MethodPost, "127.0.0.1:8083", map[string]string{"Origin": "https://page.example"}, http.StatusForbidden},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			request := httptest.NewRequest(test.method, "/server/stop", strings.NewReader(`{"nobody_playing":true}`))
+			request.Host = test.host
+			for key, value := range test.header {
+				request.Header.Set(key, value)
+			}
+			recorder := httptest.NewRecorder()
+			handler.ServeHTTP(recorder, request)
+			if recorder.Code != test.want {
+				t.Fatalf("%d, want %d", recorder.Code, test.want)
+			}
+		})
+	}
+}

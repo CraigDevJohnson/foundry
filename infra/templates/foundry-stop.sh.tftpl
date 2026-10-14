@@ -1,0 +1,20 @@
+#!/bin/bash
+# The foundry-stop document (infra/controller.tf), which the controller sends
+# when The Lobby stops the host (ADR 0006). It runs foundry-shutdown.sh, the
+# same clean shutdown as `task host:stop`, from a file of its own, and powers
+# the host off only if that script exits 0, as host:stop stops the instance
+# only then. The file keeps this script's own command line out of the
+# shutdown's search for processes still writing Foundry data.
+set -u
+
+shutdown=$(mktemp) || exit 1
+trap 'rm -f "$shutdown"' EXIT
+cat >"$shutdown" <<'FOUNDRY_SHUTDOWN_SCRIPT'
+${shutdown_script}FOUNDRY_SHUTDOWN_SCRIPT
+
+if ! bash "$shutdown"; then
+  echo "The shutdown failed; leaving the host running" >&2
+  exit 1
+fi
+
+${power_off}

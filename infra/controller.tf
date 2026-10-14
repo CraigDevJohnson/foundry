@@ -31,17 +31,24 @@ locals {
   foundry_join_url = "https://foundry.craigdevjohnson.com:30000/join"
 
   # The stop runs the same clean shutdown as `task host:stop`, then powers the
-  # host off. The power-off is appended to the shutdown script, so it runs only
-  # if the script reaches its end.
+  # host off, only if the shutdown exits 0.
   shutdown_script = file("${path.module}/templates/foundry-shutdown.sh")
-  power_off       = file("${path.module}/templates/foundry-power-off.sh")
+  stop_script = templatefile("${path.module}/templates/foundry-stop.sh.tftpl", {
+    shutdown_script = local.shutdown_script
+    power_off       = file("${path.module}/templates/foundry-power-off.sh")
+  })
+
+  # Named here and built into an ARN, so the plan shows the role's whole
+  # policy before the document exists.
+  stop_document_name = "foundry-stop"
+  stop_document_arn  = "arn:aws:ssm:${local.region}:${local.workloads_account_id}:document/${local.stop_document_name}"
 }
 
 # Sent by the controller when The Lobby stops the host (ADR 0006). It has no
 # parameters, so SendCommand callers can't change what runs. A failure
 # anywhere leaves the host running, and the foundry-stop-failed rule alerts.
 resource "aws_ssm_document" "stop" {
-  name            = "foundry-stop"
+  name            = local.stop_document_name
   document_type   = "Command"
   document_format = "JSON"
 
@@ -53,17 +60,16 @@ resource "aws_ssm_document" "stop" {
       name   = "stopFoundryAndHost"
       inputs = {
         timeoutSeconds = "300"
-        runCommand     = [local.shutdown_script, local.power_off]
+        runCommand     = [local.stop_script]
       }
     }]
   })
 
   lifecycle {
     precondition {
-      # An early successful exit in the shutdown script would skip the
-      # power-off and leave the stop reported as done on a running host.
-      condition     = !can(regex("(?m)^[ \\t]*exit([ \\t]+0)?[ \\t]*(#.*)?$", local.shutdown_script))
-      error_message = "templates/foundry-shutdown.sh must not exit successfully before its end: the foundry-stop document appends the power-off to it."
+      # The stop script writes the shutdown script out through a heredoc.
+      condition     = endswith(local.shutdown_script, "\n") && !can(regex("(?m)^FOUNDRY_SHUTDOWN_SCRIPT$", local.shutdown_script))
+      error_message = "templates/foundry-shutdown.sh must end with a newline and never contain the line FOUNDRY_SHUTDOWN_SCRIPT: templates/foundry-stop.sh.tftpl ends its heredoc there."
     }
   }
 }
@@ -139,7 +145,7 @@ data "aws_iam_policy_document" "controller" {
     actions = ["ssm:SendCommand"]
     resources = [
       aws_instance.host.arn,
-      aws_ssm_document.stop.arn,
+      local.stop_document_arn,
     ]
   }
 }
