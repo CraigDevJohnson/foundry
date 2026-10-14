@@ -27,6 +27,12 @@ import (
 // it under way until then.
 const deliveryTimeoutSeconds = 60
 
+// RecordTimeout bounds writing a sent stop to the host's tags. It runs on its
+// own time, not what is left of the request's: once the stop is sent, the
+// status can follow it, and hold off a second one, only if it is recorded.
+// The 6 seconds a change gets plus this stay inside the function's 10.
+const RecordTimeout = 2 * time.Second
+
 var (
 	// ErrNotStopped means EC2 refused the start because the host is not
 	// stopped yet, for example while it is still stopping.
@@ -82,12 +88,14 @@ func (s *Service) Start(ctx context.Context) (string, error) {
 // for the status to follow, and returns the command's ID. The document takes
 // no parameters, so nothing here can change what runs. It is sent once:
 // SendCommand has no idempotency token, so a retry after an answer that was
-// lost could send a second stop. When only the record fails, the ID comes
-// back with ErrStopNotRecorded: the stop is under way regardless.
+// lost could send a second stop. The record gets RecordTimeout of its own,
+// even when ctx has run out or been cancelled. When only the record fails,
+// the ID comes back with ErrStopNotRecorded: the stop is under way
+// regardless.
 func (s *Service) Stop(ctx context.Context) (string, error) {
-	ctx, cancel := context.WithTimeout(ctx, status.ProviderTimeout)
+	sendCtx, cancel := context.WithTimeout(ctx, status.ProviderTimeout)
 	defer cancel()
-	output, err := s.SSM.SendCommand(ctx, &ssm.SendCommandInput{
+	output, err := s.SSM.SendCommand(sendCtx, &ssm.SendCommandInput{
 		DocumentName:    aws.String(status.StopDocument),
 		DocumentVersion: aws.String("$LATEST"),
 		InstanceIds:     []string{s.InstanceID},
@@ -104,7 +112,9 @@ func (s *Service) Stop(ctx context.Context) (string, error) {
 		return "", errors.New("Systems Manager answered the stop with an unexpected record")
 	}
 	command := aws.ToString(output.Command.CommandId)
-	_, err = s.EC2.CreateTags(ctx, &ec2.CreateTagsInput{
+	recordCtx, cancelRecord := context.WithTimeout(context.WithoutCancel(ctx), RecordTimeout)
+	defer cancelRecord()
+	_, err = s.EC2.CreateTags(recordCtx, &ec2.CreateTagsInput{
 		Resources: []string{s.InstanceID},
 		Tags: []ec2types.Tag{
 			{Key: aws.String(status.StopCommandTag), Value: aws.String(command)},

@@ -166,6 +166,30 @@ func TestStop(t *testing.T) {
 	}
 }
 
+// The record gets its own time once the stop is sent, even when the
+// request's time has run out or its caller has gone.
+func TestStopIsRecordedOnItsOwnTime(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), time.Hour)
+	defer cancel()
+	s := &Service{
+		InstanceID: instanceID,
+		SSM: sendFunc(func(context.Context, *ssm.SendCommandInput) (*ssm.SendCommandOutput, error) {
+			cancel()
+			return &ssm.SendCommandOutput{Command: &ssmtypes.Command{CommandId: aws.String(commandID)}}, nil
+		}),
+		EC2: tagFunc(func(ctx context.Context, _ *ec2.CreateTagsInput) (*ec2.CreateTagsOutput, error) {
+			deadline, ok := ctx.Deadline()
+			if left := time.Until(deadline); ctx.Err() != nil || !ok || left > RecordTimeout || left < RecordTimeout-time.Second {
+				t.Errorf("the record had %v left, %v", left, ctx.Err())
+			}
+			return &ec2.CreateTagsOutput{}, nil
+		}),
+	}
+	if command, err := s.Stop(ctx); command != commandID || err != nil {
+		t.Fatalf("%q %v", command, err)
+	}
+}
+
 // A stop that was not sent is never recorded.
 func TestStopFailures(t *testing.T) {
 	failure := errors.New("provider failure")

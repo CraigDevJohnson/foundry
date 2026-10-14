@@ -218,8 +218,9 @@ resource "aws_lambda_function" "controller" {
   architectures    = ["arm64"]
 
   memory_size = 256
-  # Every route answers within 6 seconds and the site gives up at 7, so a
-  # longer run would only cost money. A stop never waits for the host.
+  # Every route answers within 6 seconds, and a sent stop's record within 2
+  # more; the site gives up at 7, so a longer run would only cost money. A stop
+  # never waits for the host.
   timeout = 10
 
   environment {

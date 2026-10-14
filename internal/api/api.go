@@ -28,7 +28,8 @@ const (
 	// gives up at 7 seconds and its router at 8.
 	ObserveTimeout = 6 * time.Second
 	// ChangeTimeout bounds a whole start or stop: the observation, then the
-	// one EC2 or Systems Manager call, inside the site's 7 seconds.
+	// one EC2 or Systems Manager call, inside the site's 7 seconds. A sent
+	// stop's record has control.RecordTimeout beyond it.
 	ChangeTimeout = 6 * time.Second
 	// changeObserveTimeout is the observation's share of ChangeTimeout, which
 	// leaves the change itself at least 2 seconds.

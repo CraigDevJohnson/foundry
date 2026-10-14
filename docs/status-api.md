@@ -210,8 +210,10 @@ They are taken during one request, not as an atomic snapshot. The whole
 observation is bounded at 6 seconds, because the site's client gives up at 7
 and its router at 8; each provider call and the probe keep their own 3-second
 limit. A start or a stop gets 6 seconds in all: at most 4 for the observation,
-and the rest for the one EC2 or Systems Manager call. The Lambda timeout is 10
-seconds. A call cut off by the bound reports `unknown` (or `unreachable` for
+and the rest for the one EC2 or Systems Manager call. A stop that was sent is
+then recorded on the host's tags with 2 seconds of its own, even when those 6
+are spent, because only a recorded stop can be followed. The Lambda timeout is
+10 seconds. A call cut off by the bound reports `unknown` (or `unreachable` for
 the probe), never a guess.
 
 The probe verifies TLS, follows no redirects and reads at most 64 KiB of the
