@@ -93,7 +93,9 @@ page content, instance IDs and IP addresses are never in an answer.
 
 ## `POST /server/start`
 
-Starts a stopped host. The body is ignored.
+Starts a stopped host. The body is ignored. The stop recorded on the host
+matters only while the host is running, so a stopped host starts whatever
+that record says, even when Systems Manager no longer keeps it.
 
 - `202` with the status, in the shape of `GET /server`, when EC2 accepted the
   start: `state` `starting`, `checks.host` as EC2 reported it after the start
@@ -107,9 +109,10 @@ Starts a stopped host. The body is ignored.
   stopped yet. Start it once it is `stopped`.
 - `404` with `{"code": "no_server"}` as for `GET /server`.
 - `503` with `{"code": "status_unknown"}` when EC2's state could not be read,
-  or `{"code": "start_failed"}` when EC2 refused the start for another reason
-  or its answer didn't arrive in time. The start may have happened then, and
-  the status shows it if so. Nothing is retried.
+  or EC2 reports the host `running` and the stop recorded on it could not be
+  read. `503` with `{"code": "start_failed"}` when EC2 refused the start for
+  another reason or its answer didn't arrive in time. The start may have
+  happened then, and the status shows it if so. Nothing is retried.
 
 ## `POST /server/stop`
 

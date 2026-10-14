@@ -150,6 +150,20 @@ func TestStartStartsAStoppedHost(t *testing.T) {
 	if a := decodeStatus(t, post(h, "/server/start", ""), http.StatusAccepted); a.State != Starting || a.Checks["host"] != "running" {
 		t.Fatalf("%+v", a)
 	}
+
+	// A stop only counts while the host runs. A stopped host starts whatever
+	// stop is recorded on it, including one whose record can't be read, as
+	// when Systems Manager no longer keeps it after a month.
+	for _, stop := range []string{"unknown", "failed", "succeeded"} {
+		change = &changer{}
+		h, _ = changeServer(fixed(withStop(report("stopped", "not_checked", "not_checked", hourAgo), stop, recently)), change)
+		if a := decodeStatus(t, post(h, "/server/start", ""), http.StatusAccepted); a.State != Starting {
+			t.Fatalf("stop %s: %+v", stop, a)
+		}
+		if starts, _ := change.counts(); starts != 1 {
+			t.Fatalf("stop %s: starts=%d", stop, starts)
+		}
+	}
 }
 
 // A host that is starting or running is left as it is; one stopping, or with
