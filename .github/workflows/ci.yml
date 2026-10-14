@@ -65,3 +65,9 @@ jobs:
         run: tofu -chdir=infra validate
       - name: Test (mocked providers)
         run: tofu -chdir=infra test
+      - name: Initialize the deploy role's root without a backend
+        run: tofu -chdir=infra/bootstrap init -backend=false -input=false -lockfile=readonly
+      - name: Validate the deploy role's root
+        run: tofu -chdir=infra/bootstrap validate
+      - name: Test the deploy role's limits (mocked provider)
+        run: tofu -chdir=infra/bootstrap test

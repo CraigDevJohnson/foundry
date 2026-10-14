@@ -303,7 +303,7 @@ Elastic IP `52.27.248.145` (`eipalloc-03508fd8e37c5f068`), data volume
 The Lobby's Foundry Tool reads the host's state from the controller,
 `foundry-dev-controller` and `foundry-prod-controller`, one per site
 environment (`infra/controller.tf`; deploying it is in
-[infra](../infra/README.md#deploying-the-controller)): EC2's state, the SSM
+[infra](../infra/README.md#the-controller)): EC2's state, the SSM
 agent's connectivity, whether `/join` answers and whether a stop is under way.
 A Member with the site's `foundry` or `foundry-admin` grant can also start and stop the host
 through it ([ADR 0006](adr/0006-the-lobby-starts-and-stops-the-host.md),
@@ -343,5 +343,5 @@ first:
 aws logs tail /aws/lambda/foundry-prod-controller --profile workloads-admin --since 1h
 ```
 
-A rebuild changes the instance ID the functions watch. The rebuild's plan
-updates them, so apply it in full.
+A rebuild changes the instance ID the functions watch. The rebuild's Deploy
+plan updates them, so apply it in full.

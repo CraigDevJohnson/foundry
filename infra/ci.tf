@@ -71,6 +71,7 @@ resource "aws_iam_role" "host_control" {
   assume_role_policy    = data.aws_iam_policy_document.host_control_trust.json
   max_session_duration  = 3600
   force_detach_policies = true
+  permissions_boundary  = local.workload_boundary_arn
 }
 
 data "aws_iam_policy_document" "host_control" {

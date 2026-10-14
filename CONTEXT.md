@@ -14,6 +14,12 @@ The management plane's backend: the Lambda function The Lobby's site calls for
 the host's status, and to start the host or send it the stop. One runs for
 each Lobby site environment.
 
+**Deploy run**:
+A run of the Deploy workflow, which Craig starts and approves. A plan run
+posts the plan and its digest; an apply run applies only a plan with the
+digest Craig gives it.
+_Avoid_: Release, rollout
+
 **Foundry VTT**:
 Foundry Virtual Tabletop, the application Craig hosts for tabletop play.
 _Avoid_: Management plane

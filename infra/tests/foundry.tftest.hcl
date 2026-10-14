@@ -356,6 +356,43 @@ run "host_control_role_trusts_only_the_environment" {
   }
 }
 
+# --- The Deploy workflow (ADR 0007) ---
+
+# The deploy role may create or change a role only while it carries the
+# boundary infra/bootstrap makes, so every role it manages carries it. The
+# host's role and the snapshot role are left to Craig's admin profile.
+run "deploy_managed_roles_carry_the_boundary" {
+  command = plan
+
+  assert {
+    condition = alltrue([
+      for role in concat([aws_iam_role.host_control], values(aws_iam_role.controller)) :
+      role.permissions_boundary == "arn:aws:iam::793680745829:policy/foundry-workload-boundary"
+    ])
+    error_message = "The controllers and the Host control role must carry foundry-workload-boundary."
+  }
+
+  assert {
+    condition     = aws_iam_role.host.permissions_boundary == null && aws_iam_role.host_dlm.permissions_boundary == null
+    error_message = "The host and snapshot roles carry no boundary: the deploy role never changes them."
+  }
+}
+
+# On a computer the plan runs as Craig's admin profile; the Deploy workflow's
+# deploy.tfvars clears it, so the deploy role's credentials are used.
+run "the_workflow_uses_the_environment_credentials" {
+  command = plan
+
+  variables {
+    aws_profile = null
+  }
+
+  assert {
+    condition     = var.aws_profile == null && can(regex("(?m)^aws_profile = null$", file("deploy.tfvars")))
+    error_message = "deploy.tfvars must clear the profile, and the root must accept that."
+  }
+}
+
 # --- The Lobby's controller ---
 
 run "controller_names_carry_the_site_environment" {

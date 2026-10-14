@@ -78,8 +78,11 @@ management plane is relied upon.
   [Session archive protection](docs/adr/0004-session-archive-protection.md)
   are superseded by aws-design §6.2 and §9.3 and kept as history.
 - [Infrastructure](infra/README.md) describes the OpenTofu root that builds the
-  host and the controller, its state, how to rebuild the host and how to
-  deploy the controller.
+  host and the controller, its state, the Deploy workflow that applies it, the
+  deploy role, how to rebuild the host and how to deploy the controller.
+- [Deploy from GitHub Actions](docs/adr/0007-deploy-from-github-actions.md)
+  records how changes reach AWS: a Deploy run Craig starts and approves, which
+  applies only the plan he read, as a role that can't step outside Foundry.
 - [Backend architecture](docs/adr/0003-serverless-management-backend.md) records
   the accepted Go Lambda and Systems Manager implementation direction.
 - [Status API](docs/status-api.md) documents the controller's HTTP interface:

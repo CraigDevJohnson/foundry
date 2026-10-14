@@ -106,6 +106,7 @@ resource "aws_iam_role" "controller" {
   description           = "Foundry controller for The Lobby ${each.key} site - host status, start and stop"
   assume_role_policy    = data.aws_iam_policy_document.controller_trust.json
   force_detach_policies = true
+  permissions_boundary  = local.workload_boundary_arn
 }
 
 # Least privilege (G7): the function writes its own log group, reads the
