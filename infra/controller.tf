@@ -1,8 +1,9 @@
-# The controller (ADR 0003, ADR 0005): the Go Lambda behind The Lobby's
-# /foundry page. It answers the site's signed requests through a Function URL
-# and only reads the host's state, so it changes nothing in AWS. One function
-# per Lobby site environment, and only that environment's site role may call
-# it (the-lobby ADR 0006).
+# The controller (ADR 0003, ADR 0005, ADR 0006): the Go Lambda behind The
+# Lobby's Foundry Tool. It answers the site's signed requests through a
+# Function URL: it reads the host's state, starts the host, and sends it the
+# foundry-stop document, which shuts Foundry down and powers the host off. One
+# function per Lobby site environment, and only that environment's site role
+# may call it (the-lobby ADR 0006).
 
 locals {
   # The Lobby's site environments. The site's permissions boundary lets
@@ -12,6 +13,12 @@ locals {
 
   controller_names = {
     for environment in local.site_environments : environment => "foundry-${environment}-controller"
+  }
+
+  # Each function runs as the role of the same name, which infra/bootstrap
+  # makes (ADR 0007): this root sets only its inline policy.
+  controller_role_arns = {
+    for environment, name in local.controller_names : environment => "arn:aws:iam::${local.workloads_account_id}:role/${name}"
   }
 
   # Built from the name rather than read from the log group, so the plan shows
@@ -28,6 +35,64 @@ locals {
   # The page players open. The controller's HTTPS probe requires exactly
   # https://host[:port]/join and reports Foundry as responding only on a 200.
   foundry_join_url = "https://foundry.craigdevjohnson.com:30000/join"
+
+  # The stop runs the same clean shutdown as `task host:stop`, then powers the
+  # host off, only if the shutdown exits 0.
+  shutdown_script = file("${path.module}/templates/foundry-shutdown.sh")
+  stop_script = templatefile("${path.module}/templates/foundry-stop.sh.tftpl", {
+    shutdown_script = local.shutdown_script
+    power_off       = file("${path.module}/templates/foundry-power-off.sh")
+  })
+
+  # Named here and built into an ARN, so the plan shows the role's whole
+  # policy before the document exists.
+  stop_document_name = "foundry-stop"
+  stop_document_arn  = "arn:aws:ssm:${local.region}:${local.workloads_account_id}:document/${local.stop_document_name}"
+
+  # The controller records the latest stop on the host under these tags
+  # (internal/status). The provider ignores them, so a plan never removes them.
+  stop_tag_keys = ["foundry:stop-command", "foundry:stop-requested"]
+}
+
+# infra/bootstrap makes the controllers' roles. An apply of this root from
+# before the roles moved there would have made them here, so a state that
+# holds them forgets them without deleting them, and the bootstrap adopts them.
+removed {
+  from = aws_iam_role.controller
+
+  lifecycle {
+    destroy = false
+  }
+}
+
+# Sent by the controller when The Lobby stops the host (ADR 0006). It has no
+# parameters, so SendCommand callers can't change what runs. A failure
+# anywhere leaves the host running, and the foundry-stop-failed rule alerts.
+resource "aws_ssm_document" "stop" {
+  name            = local.stop_document_name
+  document_type   = "Command"
+  document_format = "JSON"
+
+  content = jsonencode({
+    schemaVersion = "2.2"
+    description   = "Shut Foundry down with /foundry/stop_foundry.sh and systemd, then power the host off"
+    mainSteps = [{
+      action = "aws:runShellScript"
+      name   = "stopFoundryAndHost"
+      inputs = {
+        timeoutSeconds = "300"
+        runCommand     = [local.stop_script]
+      }
+    }]
+  })
+
+  lifecycle {
+    precondition {
+      # The stop script writes the shutdown script out through a heredoc.
+      condition     = endswith(local.shutdown_script, "\n") && !can(regex("(?m)^FOUNDRY_SHUTDOWN_SCRIPT$", local.shutdown_script))
+      error_message = "templates/foundry-shutdown.sh must end with a newline and never contain the line FOUNDRY_SHUTDOWN_SCRIPT: templates/foundry-stop.sh.tftpl ends its heredoc there."
+    }
+  }
 }
 
 resource "aws_cloudwatch_log_group" "controller" {
@@ -37,32 +102,10 @@ resource "aws_cloudwatch_log_group" "controller" {
   retention_in_days = 30
 }
 
-# Only Lambda may assume the role: each role trusts only its service principal
-# (aws-design §5.3). Like soccer's and The Lobby's function roles, and unlike
-# the DLM role, it has no aws:SourceAccount condition.
-data "aws_iam_policy_document" "controller_trust" {
-  statement {
-    actions = ["sts:AssumeRole"]
-
-    principals {
-      type        = "Service"
-      identifiers = ["lambda.amazonaws.com"]
-    }
-  }
-}
-
-resource "aws_iam_role" "controller" {
-  for_each = local.site_environments
-
-  name                  = local.controller_names[each.key]
-  description           = "Foundry controller for The Lobby ${each.key} site - reads host status only"
-  assume_role_policy    = data.aws_iam_policy_document.controller_trust.json
-  force_detach_policies = true
-}
-
-# Least privilege (G7): the function writes its own log group and reads the
-# host's state. It can't start, stop or run anything on the host; those stay
-# with the Host control role (ci.tf).
+# Least privilege (G7): the function writes its own log group, reads the
+# host's state, starts the host and sends it the parameterless foundry-stop
+# document. It can't stop the instance through EC2 or run anything else on the
+# host.
 data "aws_iam_policy_document" "controller" {
   for_each = local.site_environments
 
@@ -75,15 +118,56 @@ data "aws_iam_policy_document" "controller" {
     resources = ["arn:aws:logs:${local.region}:${local.workloads_account_id}:log-group:${local.controller_log_group_names[each.key]}:*"]
   }
 
-  # Neither action has resource-level permissions, so both need *. The
-  # function asks only about the host in FOUNDRY_INSTANCE_ID.
+  # None of these has resource-level permissions, so all need *. The
+  # function asks only about the host in FOUNDRY_INSTANCE_ID, and reads only
+  # the stop whose command ID it recorded on the host's tags. It never lists
+  # commands: ssm:ListCommands would show every command sent in the account,
+  # with its parameters.
   statement {
     sid = "ObserveHost"
     actions = [
       "ec2:DescribeInstances",
       "ssm:DescribeInstanceInformation",
+      "ssm:GetCommandInvocation",
     ]
     resources = ["*"]
+  }
+
+  statement {
+    sid       = "StartHost"
+    actions   = ["ec2:StartInstances"]
+    resources = [aws_instance.host.arn]
+  }
+
+  # SendCommand needs both the target instance and the document.
+  statement {
+    sid     = "StopHost"
+    actions = ["ssm:SendCommand"]
+    resources = [
+      aws_instance.host.arn,
+      local.stop_document_arn,
+    ]
+  }
+
+  # The stop's command ID and time go on the host's own tags, so the status
+  # can follow it with GetCommandInvocation. Only those two tags, and only on
+  # the host.
+  statement {
+    sid       = "RecordStopOnHost"
+    actions   = ["ec2:CreateTags"]
+    resources = [aws_instance.host.arn]
+
+    condition {
+      test     = "ForAllValues:StringEquals"
+      variable = "aws:TagKeys"
+      values   = local.stop_tag_keys
+    }
+
+    condition {
+      test     = "Null"
+      variable = "aws:TagKeys"
+      values   = ["false"]
+    }
   }
 }
 
@@ -91,7 +175,7 @@ resource "aws_iam_role_policy" "controller" {
   for_each = local.site_environments
 
   name   = local.controller_names[each.key]
-  role   = aws_iam_role.controller[each.key].id
+  role   = local.controller_names[each.key]
   policy = data.aws_iam_policy_document.controller[each.key].json
 }
 
@@ -100,14 +184,14 @@ resource "aws_iam_role_policy" "controller" {
 resource "aws_iam_role_policies_exclusive" "controller" {
   for_each = local.site_environments
 
-  role_name    = aws_iam_role.controller[each.key].name
+  role_name    = local.controller_names[each.key]
   policy_names = [aws_iam_role_policy.controller[each.key].name]
 }
 
 resource "aws_iam_role_policy_attachments_exclusive" "controller" {
   for_each = local.site_environments
 
-  role_name   = aws_iam_role.controller[each.key].name
+  role_name   = local.controller_names[each.key]
   policy_arns = []
 }
 
@@ -115,8 +199,8 @@ resource "aws_lambda_function" "controller" {
   for_each = local.site_environments
 
   function_name = local.controller_names[each.key]
-  description   = "Foundry host status for The Lobby ${each.key} site - read only"
-  role          = aws_iam_role.controller[each.key].arn
+  description   = "Foundry host status, start and stop for The Lobby ${each.key} site"
+  role          = local.controller_role_arns[each.key]
 
   # `task build` writes the same zip for the same source, so an unchanged
   # build plans no change.
@@ -127,8 +211,9 @@ resource "aws_lambda_function" "controller" {
   architectures    = ["arm64"]
 
   memory_size = 256
-  # GET /server answers within 6 seconds and the site gives up at 7, so a
-  # longer run would only cost money.
+  # Every route answers within 6 seconds, and a sent stop's record within 2
+  # more; the site gives up at 7, so a longer run would only cost money. A stop
+  # never waits for the host.
   timeout = 10
 
   environment {
@@ -137,6 +222,9 @@ resource "aws_lambda_function" "controller" {
       # A rebuild changes the instance ID; the next apply updates it here.
       FOUNDRY_INSTANCE_ID = aws_instance.host.id
       FOUNDRY_HTTPS_URL   = local.foundry_join_url
+      # Requests this role signed name the Member who asked for a start or
+      # stop, which the function logs.
+      FOUNDRY_SITE_ROLE_ARN = local.controller_site_role_arns[each.key]
     }
   }
 
@@ -202,4 +290,28 @@ resource "aws_cloudwatch_metric_alarm" "controller_failing" {
 
   alarm_actions = [local.alerts_topic_arn]
   ok_actions    = [local.alerts_topic_arn]
+}
+
+# A stop that fails, times out or is cancelled leaves the host running (ADR
+# 0006), so Systems Manager's status event for it notifies the workloads
+# us-west-2 alerts topic, whose policy lets EventBridge publish (aws-setup).
+# The API spells a cancelled command "Cancelled" and the user guide
+# "Canceled", and AWS doesn't say which the event carries, so both match.
+resource "aws_cloudwatch_event_rule" "stop_failed" {
+  name        = "foundry-stop-failed"
+  description = "A Foundry stop from The Lobby failed - the host is still running. See docs/operations.md."
+  event_pattern = jsonencode({
+    source        = ["aws.ssm"]
+    "detail-type" = ["EC2 Command Status-change Notification"]
+    detail = {
+      "document-name" = [aws_ssm_document.stop.name]
+      status          = ["Failed", "TimedOut", "Cancelled", "Canceled"]
+    }
+  })
+}
+
+resource "aws_cloudwatch_event_target" "stop_failed" {
+  rule      = aws_cloudwatch_event_rule.stop_failed.name
+  target_id = "alerts"
+  arn       = local.alerts_topic_arn
 }

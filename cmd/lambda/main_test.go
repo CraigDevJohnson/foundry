@@ -35,6 +35,21 @@ func TestInvalidConfigurationStopsBeforeServing(t *testing.T) {
 	}
 }
 
+// The site role is optional, but one that is not an IAM role ARN stops the
+// controller too.
+func TestInvalidSiteRoleStopsBeforeServing(t *testing.T) {
+	log := slog.New(slog.NewJSONHandler(io.Discard, nil))
+	for _, value := range []string{"site-dev-server", "arn:aws:iam::123456789012:user/site-dev-server", "arn:aws:sts::123456789012:assumed-role/site-dev-server/x"} {
+		handler, err := newHandler(context.Background(), environment(map[string]string{"FOUNDRY_SITE_ROLE_ARN": value}), log)
+		if handler != nil || err == nil || !strings.Contains(err.Error(), "FOUNDRY_SITE_ROLE_ARN") {
+			t.Fatalf("%q: handler=%v err=%v", value, handler, err)
+		}
+	}
+	if _, err := newHandler(context.Background(), environment(map[string]string{"FOUNDRY_SITE_ROLE_ARN": "arn:aws:iam::123456789012:role/site-dev-server"}), log); err != nil {
+		t.Fatal(err)
+	}
+}
+
 // A valid configuration builds the routes without credentials or an AWS call.
 func TestValidConfigurationServesWithoutAWS(t *testing.T) {
 	empty := filepath.Join(t.TempDir(), "none")
@@ -54,11 +69,60 @@ func TestValidConfigurationServesWithoutAWS(t *testing.T) {
 	}
 }
 
+// The local listener stays on a loopback address: anything another computer
+// could reach is refused.
 func TestListenAddress(t *testing.T) {
-	if got := listenAddr(environment(nil)); got != "127.0.0.1:8083" {
-		t.Fatalf("default address %q", got)
+	if got, err := listenAddr(environment(nil)); got != "127.0.0.1:8083" || err != nil {
+		t.Fatalf("default address %q %v", got, err)
 	}
-	if got := listenAddr(environment(map[string]string{"FOUNDRY_ADDR": "127.0.0.1:9000"})); got != "127.0.0.1:9000" {
-		t.Fatalf("FOUNDRY_ADDR gave %q", got)
+	for _, addr := range []string{"127.0.0.1:9000", "localhost:9000", "[::1]:9000", "127.1.2.3:9000"} {
+		if got, err := listenAddr(environment(map[string]string{"FOUNDRY_ADDR": addr})); got != addr || err != nil {
+			t.Errorf("FOUNDRY_ADDR %s gave %q %v", addr, got, err)
+		}
+	}
+	for _, addr := range []string{"0.0.0.0:8083", ":8083", "192.168.1.20:8083", "[::]:8083", "foundry.example:8083", "127.0.0.1"} {
+		if got, err := listenAddr(environment(map[string]string{"FOUNDRY_ADDR": addr})); err == nil {
+			t.Errorf("FOUNDRY_ADDR %s was allowed as %q", addr, got)
+		}
+	}
+}
+
+// The local listener answers only requests addressed to this computer, and
+// refuses a browser's cross-origin POST, while curl's requests pass.
+func TestLocalOnly(t *testing.T) {
+	handler := localOnly(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	for _, test := range []struct {
+		name, method, host string
+		header             map[string]string
+		want               int
+	}{
+		{"curl status", http.MethodGet, "127.0.0.1:8083", nil, http.StatusNoContent},
+		{"curl stop", http.MethodPost, "127.0.0.1:8083", nil, http.StatusNoContent},
+		{"localhost", http.MethodPost, "LocalHost:8083", nil, http.StatusNoContent},
+		{"IPv6", http.MethodGet, "[::1]:8083", nil, http.StatusNoContent},
+		{"no port", http.MethodGet, "127.0.0.1", nil, http.StatusNoContent},
+		{"LAN address", http.MethodPost, "192.168.1.20:8083", nil, http.StatusMisdirectedRequest},
+		{"any address", http.MethodPost, "0.0.0.0:8083", nil, http.StatusMisdirectedRequest},
+		{"same origin", http.MethodPost, "127.0.0.1:8083", map[string]string{"Sec-Fetch-Site": "same-origin"}, http.StatusNoContent},
+		{"another domain", http.MethodGet, "rebound.example:8083", nil, http.StatusMisdirectedRequest},
+		{"localhost subdomain", http.MethodGet, "localhost.rebound.example", nil, http.StatusMisdirectedRequest},
+		{"empty", http.MethodGet, "", nil, http.StatusMisdirectedRequest},
+		{"cross site", http.MethodPost, "127.0.0.1:8083", map[string]string{"Sec-Fetch-Site": "cross-site"}, http.StatusForbidden},
+		{"other origin", http.MethodPost, "127.0.0.1:8083", map[string]string{"Origin": "https://page.example"}, http.StatusForbidden},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			request := httptest.NewRequest(test.method, "/server/stop", strings.NewReader(`{"nobody_playing":true}`))
+			request.Host = test.host
+			for key, value := range test.header {
+				request.Header.Set(key, value)
+			}
+			recorder := httptest.NewRecorder()
+			handler.ServeHTTP(recorder, request)
+			if recorder.Code != test.want {
+				t.Fatalf("%d, want %d", recorder.Code, test.want)
+			}
+		})
 	}
 }

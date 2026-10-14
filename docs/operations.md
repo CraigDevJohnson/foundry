@@ -45,6 +45,8 @@ These are plain host start and stop, not the Start session and End session
 actions in [CONTEXT.md](../CONTEXT.md): stop takes no session backup, so the
 latest recovery point is the last scheduled snapshot. End session, which backs
 up first and keeps the host running if the backup fails, is separate work.
+The Lobby can start and stop the host too, through the controller
+([below](#the-lobbys-controller)).
 
 The Taskfile's host tasks find the host by its `Name=foundry` and
 `project=foundry` tags, so they keep working after a rebuild. Locally they use
@@ -77,10 +79,10 @@ with the host.
 The **Host control** workflow in GitHub Actions runs the same tasks. Start it
 from the Actions tab, pick `status`, `start` or `stop`, and for `stop` tick
 **nobody playing**. It runs in the `foundry-host` GitHub Environment and
-assumes `foundry-host-control-ci` (`infra/ci.tf`) through the workloads GitHub
-OIDC provider. The role can only describe instances, start and stop this
-instance, and run the `foundry-shutdown` document on it, never arbitrary
-commands. Setup, once the role is applied:
+assumes `foundry-host-control-ci` through the workloads GitHub OIDC provider.
+`infra/bootstrap/roles.tf` makes the role and `infra/ci.tf` sets what it may
+do: only describe instances, start and stop this instance, and run the
+`foundry-shutdown` document on it, never arbitrary commands. Setup, once the role is applied:
 
 1. Create the `foundry-host` environment under the repository's
    Settings > Environments. Set **Deployment branches** to `main` only: the
@@ -89,7 +91,7 @@ commands. Setup, once the role is applied:
    required reviewers: runs start without an approval step (Craig's call,
    2026-10-09).
 2. Add the variable `AWS_HOST_CONTROL_ROLE_ARN` with the value of
-   `tofu -chdir=infra output -raw host_control_role_arn`.
+   `tofu -chdir=infra/bootstrap output -raw host_control_role_arn`.
 
 ## DNS
 
@@ -298,13 +300,37 @@ Elastic IP `52.27.248.145` (`eipalloc-03508fd8e37c5f068`), data volume
 
 ## The Lobby's controller
 
-The Lobby's `/foundry` page reads the host's state from the controller,
+The Lobby's Foundry Tool reads the host's state from the controller,
 `foundry-dev-controller` and `foundry-prod-controller`, one per site
 environment (`infra/controller.tf`; deploying it is in
-[infra](../infra/README.md#deploying-the-controller)). It only reads: EC2's
-state, the SSM agent's connectivity and whether `/join` answers. It can't start
-or stop the host; that stays with the tasks and the Host control workflow
-above.
+[infra](../infra/README.md#the-controller)): EC2's state, the SSM
+agent's connectivity, whether `/join` answers and whether a stop is under way.
+A Member with the site's `foundry` or `foundry-admin` grant can also start and stop the host
+through it ([ADR 0006](adr/0006-the-lobby-starts-and-stops-the-host.md),
+[status API](status-api.md)). A start is an EC2 start. A stop, once the Member
+confirms nobody is playing, sends the `foundry-stop` document: the same
+shutdown as `host:stop` (above) and, only if that succeeds, a power-off a
+minute later, which EC2 turns into a stop because the host's
+instance-initiated shutdown behavior is `stop`. If the shutdown fails, the
+host stays on, as with `host:stop`.
+
+A failed, timed-out or cancelled `foundry-stop` emails through the workloads
+`alerts` topic (the `foundry-stop-failed` EventBridge rule). Foundry may then be
+down while the host runs. Read the command's output, then stop it with
+`task host:stop` or the Host control workflow, or start Foundry again. The
+alert names the command (`command-id`), and the host's `foundry:stop-command`
+tag holds the latest one. Reading command output uses `workloads-admin`, so an
+agent asks Craig first:
+
+```sh
+aws ec2 describe-instances --instance-ids i-05dfb9abbc1caac32 \
+  --query 'Reservations[0].Instances[0].Tags[?starts_with(Key, `foundry:stop`)]' \
+  --output table --profile workloads-admin
+aws ssm get-command-invocation --command-id <id> --instance-id i-05dfb9abbc1caac32 --profile workloads-admin
+```
+
+Each start and stop is a `start` or `stop` line in the function's log, with
+who asked: the Member the site named, or the caller's own role session.
 
 The `foundry-<env>-controller-failing` alarm emails through the workloads
 `alerts` topic when the function crashed, timed out, or could not start, for
@@ -317,5 +343,5 @@ first:
 aws logs tail /aws/lambda/foundry-prod-controller --profile workloads-admin --since 1h
 ```
 
-A rebuild changes the instance ID the functions watch. The rebuild's plan
-updates them, so apply it in full.
+A rebuild changes the instance ID the functions watch. The rebuild's Deploy
+plan updates them, so apply it in full.

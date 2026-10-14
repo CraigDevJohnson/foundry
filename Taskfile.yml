@@ -69,11 +69,12 @@ tasks:
 
         AWS_PROFILE=workloads-readonly task run
 
-      It reads the host with the credentials in the environment and changes
-      nothing. FOUNDRY_AWS_REGION, FOUNDRY_INSTANCE_ID and FOUNDRY_HTTPS_URL
+      It reads the host with the credentials in the environment; only its
+      POST /server/start and /server/stop change anything, and the read-only
+      profile can't. FOUNDRY_AWS_REGION, FOUNDRY_INSTANCE_ID and FOUNDRY_HTTPS_URL
       default to us-west-2, the host found by its tags (as host:status finds
       it) and the join page; set any of them to override it. FOUNDRY_ADDR
-      changes the address.
+      changes the address, which must be a loopback address.
     cmds:
       - |
         FOUNDRY_AWS_REGION="${FOUNDRY_AWS_REGION:-{{.AWS_REGION}}}" \

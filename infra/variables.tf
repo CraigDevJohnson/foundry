@@ -25,3 +25,13 @@ variable "controller_package_path" {
     error_message = "controller_package_path must name the zip `task build` writes, such as ../dist/bootstrap.zip."
   }
 }
+
+# On a computer, Craig's admin profile, pinned so a plan never runs as anything
+# else by accident. The Deploy workflow passes deploy.tfvars, which sets it to
+# null: OpenTofu then uses the deploy role's credentials from the environment
+# (ADR 0007). The backend reads it too, so init and plan take the same value.
+variable "aws_profile" {
+  description = "The named AWS profile for state and changes, or null for credentials from the environment (the Deploy workflow)."
+  type        = string
+  default     = "workloads-admin"
+}

@@ -6,12 +6,18 @@ locals {
 # Default provider: the workloads account, where Foundry and its state live.
 provider "aws" {
   region              = local.region
-  profile             = "workloads-admin"
+  profile             = var.aws_profile
   allowed_account_ids = [local.workloads_account_id]
 
   default_tags {
     tags = {
       project = "foundry"
     }
+  }
+
+  # The controller writes these on the host when it sends a stop
+  # (controller.tf); they are its record, not configuration.
+  ignore_tags {
+    keys = local.stop_tag_keys
   }
 }

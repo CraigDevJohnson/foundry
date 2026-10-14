@@ -1,0 +1,103 @@
+# Deploys the infra root from GitHub Actions as the foundry-deployer role
+# (infra/bootstrap). It runs only when Craig starts it by hand (Run workflow):
+# mode plan posts the plan and its digest to the run summary, and mode apply,
+# which he starts after reading that plan and gives its digest, applies a fresh
+# plan only when its digest matches, so it applies exactly the plan he read or
+# nothing. No push starts it, because every run holds the deploy role's write
+# credentials, and the job runs only when Craig's own account started the run
+# (and any re-run of it) on main. The job runs in the deploy GitHub
+# Environment, which only main may use and which has Craig as its required
+# reviewer, so GitHub holds every run until he approves it and only then hands
+# it the deploy role's credentials. See ADR 0007 and infra/README.md.
+#
+# The deploy role trusts this job through GitHub OIDC with the subject
+# repo:CraigDevJohnson@42454849/foundry@1361164956:environment:deploy.
+name: Deploy
+
+on:
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: plan only shows what would change; apply changes AWS
+        type: choice
+        options: [plan, apply]
+        default: plan
+      plan:
+        description: For apply, the plan digest from the summary of the plan run you read
+        type: string
+        default: ''
+      rebuild_host:
+        description: Replace the host's instance, keeping the data volume and Elastic IP (infra/README.md, Rebuilding the host)
+        type: boolean
+        default: false
+
+permissions: {}
+
+# One deploy at a time; a second run waits instead of cancelling one mid-apply.
+concurrency:
+  group: foundry-deploy
+  cancel-in-progress: false
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  deploy:
+    name: ${{ inputs.mode || 'plan' }} as the deployer
+    if: >-
+      github.repository == 'CraigDevJohnson/foundry' &&
+      github.repository_id == '1361164956' &&
+      github.repository_owner_id == '42454849' &&
+      github.actor_id == '42454849' &&
+      github.triggering_actor == 'CraigDevJohnson' &&
+      github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    environment: deploy
+    permissions:
+      contents: read
+      id-token: write # assume the deploy role through GitHub OIDC
+    steps:
+      - name: Check out the approved main revision
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Set up Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+          cache: false
+      - name: Download and verify modules
+        run: |
+          go mod download
+          go mod verify
+      - name: Install Task
+        run: go install github.com/go-task/task/v3/cmd/task@v3.54.0
+      - name: Build the controller package
+        run: task build
+      - name: Set up OpenTofu
+        uses: opentofu/setup-opentofu@a1320f892987e89d278cc92dc5adc984fb93aca4 # v2.0.2
+        with:
+          tofu_version: 1.12.6
+          tofu_wrapper: false
+      - name: Obtain the deploy role's credentials
+        uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd # v6.3.0
+        with:
+          role-to-assume: arn:aws:iam::793680745829:role/foundry-deployer
+          aws-region: us-west-2
+          audience: sts.amazonaws.com
+          allowed-account-ids: '793680745829'
+          role-duration-seconds: 1800
+          role-session-name: foundry-deploy-${{ github.run_id }}
+          unset-current-credentials: true
+          output-credentials: false
+          retry-max-attempts: 2
+          action-timeout-s: 60
+      - name: Plan, and in apply mode apply the approved plan
+        env:
+          MODE: ${{ inputs.mode || 'plan' }}
+          APPROVED_PLAN: ${{ inputs.plan }}
+          REBUILD_HOST: ${{ inputs.rebuild_host }}
+          AWS_EC2_METADATA_DISABLED: 'true'
+        run: bash scripts/deploy.sh "$MODE"

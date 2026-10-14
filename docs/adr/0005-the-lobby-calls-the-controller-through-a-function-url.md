@@ -25,6 +25,7 @@ actions such as start and stop come later as their own routes, and will log
 the Member the site names in `X-Lobby-Member` once they have checked that the
 site's role signed the request. Until then, start and stop stay
 with the Host control workflow and `task host:start` and `task host:stop`.
+[ADR 0006](0006-the-lobby-starts-and-stops-the-host.md) adds them.
 
 ## What this supersedes
 

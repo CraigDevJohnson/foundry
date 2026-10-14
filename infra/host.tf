@@ -125,6 +125,11 @@ resource "aws_instance" "host" {
   # No key_name: admin access is Session Manager only.
   vpc_security_group_ids = [aws_security_group.foundry.id]
 
+  # EC2's default, stated because a stop from The Lobby powers the host off
+  # from inside (the foundry-stop document, ADR 0006): with terminate here,
+  # that would destroy the host instead.
+  instance_initiated_shutdown_behavior = "stop"
+
   # First-boot setup only; it holds no secrets and never formats a disk.
   user_data = local.user_data
 

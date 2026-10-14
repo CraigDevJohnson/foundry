@@ -78,13 +78,17 @@ management plane is relied upon.
   [Session archive protection](docs/adr/0004-session-archive-protection.md)
   are superseded by aws-design §6.2 and §9.3 and kept as history.
 - [Infrastructure](infra/README.md) describes the OpenTofu root that builds the
-  host and the controller, its state, how to rebuild the host and how to
-  deploy the controller.
+  host and the controller, its state, the Deploy workflow that applies it, the
+  deploy role, how to rebuild the host and how to deploy the controller.
+- [Deploy from GitHub Actions](docs/adr/0007-deploy-from-github-actions.md)
+  records how changes reach AWS: a Deploy run Craig starts and approves, which
+  applies only the plan he read, as a role that can't step outside Foundry.
 - [Backend architecture](docs/adr/0003-serverless-management-backend.md) records
   the accepted Go Lambda and Systems Manager implementation direction.
 - [Status API](docs/status-api.md) documents the controller's HTTP interface:
-  the read-only `GET /server` that The Lobby's site serves at
-  `/api/foundry/server` for its `/foundry` page, which is not built yet.
+  `GET /server`, which The Lobby's site serves at `/api/foundry/server` for its
+  `/foundry` page, and `POST /server/start` and `POST /server/stop` for its
+  Members with Foundry access ([ADR 0006](docs/adr/0006-the-lobby-starts-and-stops-the-host.md)).
 
 ## Development
 
@@ -101,11 +105,13 @@ host contract before rendering a private installation tree. Rendering never
 installs files or contacts the host.
 
 The controller is a Go HTTP server that reports the host's status to The
-Lobby. On Lambda it serves the site through an `AWS_IAM` Function URL, one
-function per Lobby site environment ([ADR 0005](docs/adr/0005-the-lobby-calls-the-controller-through-a-function-url.md),
+Lobby, and starts and stops the host for it. On Lambda it serves the site
+through an `AWS_IAM` Function URL, one function per Lobby site environment
+([ADR 0005](docs/adr/0005-the-lobby-calls-the-controller-through-a-function-url.md),
+[ADR 0006](docs/adr/0006-the-lobby-starts-and-stops-the-host.md),
 [infra/controller.tf](infra/controller.tf)); `task run` serves it on your
-computer with your AWS read credentials. It reads EC2, the Systems Manager
-agent and Foundry's join page, and changes nothing. Local recovery-set
+computer with your AWS credentials. It reads EC2, the Systems Manager agent,
+Foundry's join page and the stop recorded on the host. Local recovery-set
 capture/validation/materialization is now available for offline testing;
 cloud backups, session operations and live recovery remain tracked in the
 [first-release backlog](https://github.com/CraigDevJohnson/foundry/issues/2).

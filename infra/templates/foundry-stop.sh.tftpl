@@ -1,0 +1,82 @@
+#!/bin/bash
+# The foundry-stop document (infra/controller.tf), which the controller sends
+# when The Lobby stops the host (ADR 0006). It runs foundry-shutdown.sh, the
+# same clean shutdown as `task host:stop`, from a file of its own, and powers
+# the host off only if that script exits 0, as host:stop stops the instance
+# only then. The file keeps this script's own command line out of the
+# shutdown's search for processes still writing Foundry data.
+#
+# Each Lobby environment has its own controller, so two stops can reach the
+# host at once, or one just after the other finished. Only one runs the
+# shutdown. One that waited for it, or that arrives while its power-off is
+# still pending, ends the way it did, so the shutdown never runs twice and
+# both commands report what happened to the host.
+set -u
+
+lock=/run/foundry-stop.lock
+succeeded=/run/foundry-stop.succeeded
+
+# powering_off: a stop succeeded and scheduled the power-off, a minute ahead,
+# less than two minutes ago. Later than that, the host should be off; if it
+# is still running, the power-off didn't happen and a new stop runs in full.
+powering_off() {
+  local written
+  written=$(stat -c %Y "$succeeded" 2>/dev/null) || return 1
+  (($(date +%s) - written < 120))
+}
+
+if ! exec 9>"$lock"; then
+  echo "Could not open the stop's lock; leaving the host running" >&2
+  exit 1
+fi
+waited=false
+if ! flock -n 9; then
+  echo "Another stop is shutting Foundry down; waiting for it"
+  # Within the document's 300 seconds, so this ends with a message.
+  if ! flock -w 280 9; then
+    echo "The other stop is still running; leaving the outcome to it" >&2
+    exit 1
+  fi
+  waited=true
+fi
+if powering_off; then
+  echo "Another stop shut Foundry down; the host powers off in a minute"
+  exit 0
+fi
+if [[ "$waited" == true ]]; then
+  echo "The other stop failed; leaving the host running" >&2
+  exit 1
+fi
+if ! rm -f "$succeeded"; then
+  echo "Could not clear the last stop's outcome; leaving the host running" >&2
+  exit 1
+fi
+
+shutdown=$(mktemp) || exit 1
+trap 'rm -f "$shutdown"' EXIT
+# A partial file could run as a shorter script that exits 0, so a failed
+# write stops here, before anything runs.
+if ! cat >"$shutdown" <<'FOUNDRY_SHUTDOWN_SCRIPT'
+${shutdown_script}FOUNDRY_SHUTDOWN_SCRIPT
+then
+  echo "Could not write the shutdown script; leaving the host running" >&2
+  exit 1
+fi
+
+if ! bash "$shutdown"; then
+  echo "The shutdown failed; leaving the host running" >&2
+  exit 1
+fi
+
+# The success marker goes down before the power-off is scheduled, so a stop
+# that schedules it leaves the marker for one that waited or arrives next. It
+# comes off again if the power-off can't be scheduled.
+if ! : >"$succeeded"; then
+  echo "Could not record that Foundry shut down; leaving the host running" >&2
+  exit 1
+fi
+if ! (
+${power_off}); then
+  rm -f "$succeeded"
+  exit 1
+fi
