@@ -277,17 +277,24 @@ func (h *Handler) start(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	current, err := h.Change.Start(ctx)
-	if errors.Is(err, control.ErrNotStopped) {
+	httpStatus := http.StatusAccepted
+	switch {
+	case errors.Is(err, control.ErrStartedElsewhere):
+		// Another start, such as the other site environment's, got there
+		// first: there is nothing left to start, and the host is starting.
+		h.logChange(ctx, slog.LevelInfo, "start", "started_elsewhere", who, report, "now", current)
+		httpStatus = http.StatusOK
+	case errors.Is(err, control.ErrNotStopped):
 		h.logChange(ctx, slog.LevelInfo, "start", "refused_stopping", who, report)
 		writeJSON(w, http.StatusConflict, map[string]string{"code": "stopping"})
 		return
-	}
-	if err != nil {
+	case err != nil:
 		h.logChange(ctx, slog.LevelError, "start", "failed", who, report, "err", err.Error())
 		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"code": "start_failed"})
 		return
+	default:
+		h.logChange(ctx, slog.LevelInfo, "start", "started", who, report, "now", current)
 	}
-	h.logChange(ctx, slog.LevelInfo, "start", "started", who, report, "now", current)
 	// The answer is the status from here: EC2's state after the start, with
 	// the checks that only a running host gets not taken. EC2 gives the new
 	// start time only when the host is next described, so a host it already
@@ -300,7 +307,7 @@ func (h *Handler) start(w http.ResponseWriter, r *http.Request) {
 	if current == "running" {
 		state = Starting
 	}
-	writeJSON(w, http.StatusAccepted, h.answer(started, state))
+	writeJSON(w, httpStatus, h.answer(started, state))
 }
 
 // POST /server/stop: shuts Foundry down and powers off a running host, once

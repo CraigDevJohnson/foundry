@@ -32,7 +32,27 @@ func (f startFunc) StartInstances(ctx context.Context, in *ec2.StartInstancesInp
 	return f(ctx, in)
 }
 
+func (f startFunc) DescribeInstances(context.Context, *ec2.DescribeInstancesInput, ...func(*ec2.Options)) (*ec2.DescribeInstancesOutput, error) {
+	return nil, errors.New("a start EC2 didn't refuse for the host's state must not look again")
+}
+
 func (f startFunc) CreateTags(context.Context, *ec2.CreateTagsInput, ...func(*ec2.Options)) (*ec2.CreateTagsOutput, error) {
+	return nil, errors.New("a start must not tag the host")
+}
+
+// refusedStart is EC2 refusing the start for the host's state, then
+// describing the host with describe.
+type refusedStart func(context.Context, *ec2.DescribeInstancesInput) (*ec2.DescribeInstancesOutput, error)
+
+func (f refusedStart) StartInstances(context.Context, *ec2.StartInstancesInput, ...func(*ec2.Options)) (*ec2.StartInstancesOutput, error) {
+	return nil, &smithy.GenericAPIError{Code: "IncorrectInstanceState"}
+}
+
+func (f refusedStart) DescribeInstances(ctx context.Context, in *ec2.DescribeInstancesInput, _ ...func(*ec2.Options)) (*ec2.DescribeInstancesOutput, error) {
+	return f(ctx, in)
+}
+
+func (f refusedStart) CreateTags(context.Context, *ec2.CreateTagsInput, ...func(*ec2.Options)) (*ec2.CreateTagsOutput, error) {
 	return nil, errors.New("a start must not tag the host")
 }
 
@@ -40,6 +60,10 @@ type tagFunc func(context.Context, *ec2.CreateTagsInput) (*ec2.CreateTagsOutput,
 
 func (f tagFunc) StartInstances(context.Context, *ec2.StartInstancesInput, ...func(*ec2.Options)) (*ec2.StartInstancesOutput, error) {
 	return nil, errors.New("a stop must not start the host")
+}
+
+func (f tagFunc) DescribeInstances(context.Context, *ec2.DescribeInstancesInput, ...func(*ec2.Options)) (*ec2.DescribeInstancesOutput, error) {
+	return nil, errors.New("a stop must not describe the host")
 }
 
 func (f tagFunc) CreateTags(ctx context.Context, in *ec2.CreateTagsInput, _ ...func(*ec2.Options)) (*ec2.CreateTagsOutput, error) {
@@ -107,7 +131,6 @@ func TestStartFailures(t *testing.T) {
 		err    error
 		want   error
 	}{
-		{"not stopped yet", nil, &smithy.GenericAPIError{Code: "IncorrectInstanceState"}, ErrNotStopped},
 		{"other failure", nil, failure, failure},
 		{"nil", nil, nil, nil},
 		{"empty", &ec2.StartInstancesOutput{}, nil, nil},
@@ -122,6 +145,64 @@ func TestStartFailures(t *testing.T) {
 			state, err := s.Start(context.Background())
 			if state != "" || err == nil || (test.want != nil && !errors.Is(err, test.want)) {
 				t.Fatalf("%q %v", state, err)
+			}
+		})
+	}
+}
+
+func described(id string, state ec2types.InstanceStateName) *ec2.DescribeInstancesOutput {
+	return &ec2.DescribeInstancesOutput{Reservations: []ec2types.Reservation{{Instances: []ec2types.Instance{{
+		InstanceId: aws.String(id),
+		State:      &ec2types.InstanceState{Name: state},
+	}}}}}
+}
+
+// When EC2 refuses the start for the host's state, Start looks at only the
+// configured host again, on its own time. A host another start got to first,
+// now starting or running, is ErrStartedElsewhere with its state; anything
+// else, including no clear answer, is ErrNotStopped.
+func TestARefusedStartLooksAgain(t *testing.T) {
+	noState := described(instanceID, ec2types.InstanceStateNamePending)
+	noState.Reservations[0].Instances[0].State = nil
+	two := described(instanceID, ec2types.InstanceStateNamePending)
+	two.Reservations[0].Instances = append(two.Reservations[0].Instances, two.Reservations[0].Instances[0])
+	for _, test := range []struct {
+		name   string
+		output *ec2.DescribeInstancesOutput
+		err    error
+		state  string
+		want   error
+	}{
+		{"started elsewhere", described(instanceID, ec2types.InstanceStateNamePending), nil, "pending", ErrStartedElsewhere},
+		{"already running", described(instanceID, ec2types.InstanceStateNameRunning), nil, "running", ErrStartedElsewhere},
+		{"still stopping", described(instanceID, ec2types.InstanceStateNameStopping), nil, "", ErrNotStopped},
+		{"stopped", described(instanceID, ec2types.InstanceStateNameStopped), nil, "", ErrNotStopped},
+		{"shutting down", described(instanceID, ec2types.InstanceStateNameShuttingDown), nil, "", ErrNotStopped},
+		{"describe failed", nil, errors.New("provider failure"), "", ErrNotStopped},
+		{"nil", nil, nil, "", ErrNotStopped},
+		{"empty", &ec2.DescribeInstancesOutput{}, nil, "", ErrNotStopped},
+		{"foreign", described("i-fffffffffffffffff", ec2types.InstanceStateNamePending), nil, "", ErrNotStopped},
+		{"no state", noState, nil, "", ErrNotStopped},
+		{"two", two, nil, "", ErrNotStopped},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			ctx, cancel := context.WithCancel(context.Background())
+			s := &Service{InstanceID: instanceID, EC2: refusedStart(func(ctx context.Context, in *ec2.DescribeInstancesInput) (*ec2.DescribeInstancesOutput, error) {
+				if len(in.InstanceIds) != 1 || in.InstanceIds[0] != instanceID || len(in.Filters) != 0 {
+					t.Errorf("unscoped describe: %+v", in)
+				}
+				deadline, ok := ctx.Deadline()
+				if ctx.Err() != nil || !ok || time.Until(deadline) > RecheckTimeout {
+					t.Errorf("not on its own bounded time: %v %v", ctx.Err(), deadline)
+				}
+				return test.output, test.err
+			})}
+			// The request is already cancelled when the start is refused:
+			// the look must still get its own time.
+			cancel()
+			state, err := s.Start(ctx)
+			if state != test.state || !errors.Is(err, test.want) {
+				t.Fatalf("%q %v, want %q %v", state, err, test.state, test.want)
 			}
 		})
 	}

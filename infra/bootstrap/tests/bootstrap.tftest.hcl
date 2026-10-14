@@ -15,17 +15,20 @@ mock_provider "aws" {
     }
   }
 
+  # tofu test can't import, so no Foundry role exists here and the plan makes
+  # all three rather than adopting them.
+  mock_data "aws_iam_roles" {
+    defaults = {
+      names = []
+      arns  = []
+    }
+  }
+
   mock_resource "aws_iam_policy" {
     defaults = {
       arn = "arn:aws:iam::793680745829:policy/foundry-workload-boundary"
     }
   }
-}
-
-# tofu test can't import, so the plan here makes the Host control role
-# rather than adopting it.
-variables {
-  adopt_host_control_role = false
 }
 
 run "deployer_trusts_only_the_deploy_environment" {

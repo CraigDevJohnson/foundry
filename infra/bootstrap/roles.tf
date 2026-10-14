@@ -35,6 +35,25 @@ data "aws_iam_policy_document" "controller_trust" {
   }
 }
 
+# The roles may already exist. The infra root made foundry-host-control-ci
+# before this root did, and an apply of the infra root from before the deploy
+# role would have made the controllers' roles. So this root adopts whichever
+# of the three exist and makes the rest, and the infra root forgets them
+# (infra/ci.tf, infra/controller.tf). The offline tests mock this list empty:
+# `tofu test` can't import.
+data "aws_iam_roles" "existing" {
+  name_regex = "^foundry-(dev-controller|prod-controller|host-control-ci)$"
+}
+
+import {
+  for_each = {
+    for environment, name in local.controller_role_names : environment => name
+    if contains(data.aws_iam_roles.existing.names, name)
+  }
+  to = aws_iam_role.controller[each.key]
+  id = each.value
+}
+
 resource "aws_iam_role" "controller" {
   for_each = local.site_environments
 
@@ -70,17 +89,8 @@ data "aws_iam_policy_document" "host_control_trust" {
   }
 }
 
-# The infra root made this role before the deploy role existed. Its first
-# Deploy run forgets it (infra/ci.tf), and this root adopts it. The offline
-# tests turn the import off: `tofu test` can't import.
-variable "adopt_host_control_role" {
-  description = "Import the existing foundry-host-control-ci role. Only the offline tests set this to false."
-  type        = bool
-  default     = true
-}
-
 import {
-  for_each = var.adopt_host_control_role ? toset([local.host_control_role_name]) : toset([])
+  for_each = contains(data.aws_iam_roles.existing.names, local.host_control_role_name) ? toset([local.host_control_role_name]) : toset([])
   to       = aws_iam_role.host_control
   id       = each.value
 }

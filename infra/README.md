@@ -139,10 +139,15 @@ Craig approves it, `tofu -chdir=infra/bootstrap apply bootstrap.tfplan` prints
 the role's ARN, `arn:aws:iam::793680745829:role/foundry-deployer`, which the
 workflow names. A bootstrap applied before the roles moved here plans 1 to
 import, 2 to add and 2 to change: the same import, the controllers' roles,
-and the deploy role's inline policy.
+and the deploy role's inline policy. The bootstrap adopts whichever of the
+three roles already exist and makes the rest, so if an apply of the infra
+root made the controllers' roles first, it imports them too and changes them
+to put them inside the boundary (3 to import, 0 to add and 4 to change,
+over that earlier bootstrap).
 
 The first Deploy plan after that forgets `foundry-host-control-ci` without
-deleting it, since `bootstrap/` now holds it.
+deleting it, since `bootstrap/` now holds it, and so the controllers' roles
+if the infra root made them.
 
 ## The controller
 
@@ -160,8 +165,10 @@ Lambda refuses a grant to a role it can't find.
    function, its Function URL, the two grants to the site role and the alarm),
    plus the `foundry-stop` document and the `foundry-stop-failed` rule and its
    target. It forgets `foundry-host-control-ci` (1 to forget) and removes the
-   `host_control_role_arn` output, which `bootstrap/` now has. It should
-   change nothing else. `aws_instance.host` now states
+   `host_control_role_arn` output, which `bootstrap/` now has. If an earlier
+   apply of this root made the controller, the counts differ: the plan
+   changes what that apply made and forgets the controllers' roles too. It
+   should change nothing else. `aws_instance.host` now states
    `instance_initiated_shutdown_behavior = "stop"`, EC2's default; if the plan
    shows any change to the host, stop and look before applying.
 3. Run a Deploy apply with the plan's digest.

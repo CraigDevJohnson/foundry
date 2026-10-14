@@ -33,10 +33,20 @@ const deliveryTimeoutSeconds = 60
 // The 6 seconds a change gets plus this stay inside the function's 10.
 const RecordTimeout = 2 * time.Second
 
+// RecheckTimeout bounds looking at the host again after EC2 refused a start.
+// Like RecordTimeout it runs on its own time, and a start never records a
+// stop, so the 6 seconds a change gets plus this stay inside the function's 10.
+const RecheckTimeout = 2 * time.Second
+
 var (
 	// ErrNotStopped means EC2 refused the start because the host is not
 	// stopped yet, for example while it is still stopping.
 	ErrNotStopped = errors.New("EC2 can't start the host in its current state")
+	// ErrStartedElsewhere means EC2 refused the start because the host had
+	// already left stopped and is starting or running: another start, such
+	// as the other site environment's, got there first. Start returns the
+	// state EC2 reported with it.
+	ErrStartedElsewhere = errors.New("another start got to the host first")
 	// ErrAgentOffline means Systems Manager has no connected agent on the
 	// host to send the stop to, for example right after it booted.
 	ErrAgentOffline = errors.New("the host's Systems Manager agent is not connected")
@@ -47,6 +57,7 @@ var (
 
 type EC2Changer interface {
 	StartInstances(context.Context, *ec2.StartInstancesInput, ...func(*ec2.Options)) (*ec2.StartInstancesOutput, error)
+	DescribeInstances(context.Context, *ec2.DescribeInstancesInput, ...func(*ec2.Options)) (*ec2.DescribeInstancesOutput, error)
 	CreateTags(context.Context, *ec2.CreateTagsInput, ...func(*ec2.Options)) (*ec2.CreateTagsOutput, error)
 }
 
@@ -67,13 +78,19 @@ type Service struct {
 // Start asks EC2 to start the host and returns the state EC2 reports for it
 // afterwards, normally pending. It is asked once: a retry after an answer that
 // was lost would find the host already starting, and could report it as
-// refused.
+// refused. When EC2 refuses it for the host's state, Start looks at the host
+// again, because another start may have got there first since the host was
+// observed stopped: a host now starting or running is ErrStartedElsewhere,
+// anything else ErrNotStopped.
 func (s *Service) Start(ctx context.Context) (string, error) {
 	ctx, cancel := context.WithTimeout(ctx, status.ProviderTimeout)
 	defer cancel()
 	output, err := s.EC2.StartInstances(ctx, &ec2.StartInstancesInput{InstanceIds: []string{s.InstanceID}}, func(o *ec2.Options) { o.RetryMaxAttempts = 1 })
 	if err != nil {
 		if code(err) == "IncorrectInstanceState" {
+			if state := s.hostState(ctx); state == string(ec2types.InstanceStateNamePending) || state == string(ec2types.InstanceStateNameRunning) {
+				return state, ErrStartedElsewhere
+			}
 			return "", ErrNotStopped
 		}
 		return "", err
@@ -125,6 +142,22 @@ func (s *Service) Stop(ctx context.Context) (string, error) {
 		return command, fmt.Errorf("%w: %w", ErrStopNotRecorded, err)
 	}
 	return command, nil
+}
+
+// hostState reads the host's state from EC2 on its own time, or returns ""
+// when EC2 doesn't answer with the host.
+func (s *Service) hostState(ctx context.Context) string {
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), RecheckTimeout)
+	defer cancel()
+	output, err := s.EC2.DescribeInstances(ctx, &ec2.DescribeInstancesInput{InstanceIds: []string{s.InstanceID}})
+	if err != nil || output == nil || len(output.Reservations) != 1 || len(output.Reservations[0].Instances) != 1 {
+		return ""
+	}
+	instance := output.Reservations[0].Instances[0]
+	if aws.ToString(instance.InstanceId) != s.InstanceID || instance.State == nil {
+		return ""
+	}
+	return string(instance.State.Name)
 }
 
 func (s *Service) now() time.Time {

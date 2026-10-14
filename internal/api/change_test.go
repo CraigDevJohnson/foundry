@@ -166,6 +166,24 @@ func TestStartStartsAStoppedHost(t *testing.T) {
 	}
 }
 
+// When another start, such as the other site environment's, gets to the host
+// between the observation and this start, there is nothing left to start: the
+// answer is 200 with the host starting, and the log says so rather than that
+// this request started it.
+func TestStartAfterAnotherStart(t *testing.T) {
+	for _, current := range []string{"pending", "running"} {
+		change := &changer{startState: current, startErr: control.ErrStartedElsewhere}
+		h, logs := changeServer(fixed(report("stopped", "not_checked", "not_checked", hourAgo)), change)
+		a := decodeStatus(t, post(h, "/server/start", ""), http.StatusOK)
+		if a.State != Starting || a.Checks["host"] != current || a.StartedAt != nil {
+			t.Fatalf("%s: %+v", current, a)
+		}
+		if !strings.Contains(logs.String(), `"msg":"start","outcome":"started_elsewhere","caller":"local"`) || strings.Contains(logs.String(), `"outcome":"started"`) {
+			t.Errorf("%s: logs %s", current, logs)
+		}
+	}
+}
+
 // A host that is starting or running is left as it is; one stopping, or with
 // a stop under way, can't be started yet.
 func TestStartLeavesOtherHostsAlone(t *testing.T) {

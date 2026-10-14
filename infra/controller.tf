@@ -54,6 +54,17 @@ locals {
   stop_tag_keys = ["foundry:stop-command", "foundry:stop-requested"]
 }
 
+# infra/bootstrap makes the controllers' roles. An apply of this root from
+# before the deploy role would have made them here, so a state that holds them
+# forgets them without deleting them, and the bootstrap adopts them.
+removed {
+  from = aws_iam_role.controller
+
+  lifecycle {
+    destroy = false
+  }
+}
+
 # Sent by the controller when The Lobby stops the host (ADR 0006). It has no
 # parameters, so SendCommand callers can't change what runs. A failure
 # anywhere leaves the host running, and the foundry-stop-failed rule alerts.
