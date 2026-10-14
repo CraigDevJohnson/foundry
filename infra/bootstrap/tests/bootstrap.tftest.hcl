@@ -171,15 +171,22 @@ run "alerts_go_only_to_the_alerts_topic" {
     error_message = "An alarm may only notify the alerts topic."
   }
 
+  # events:TargetArn lists every target in the request: a plain operator
+  # would pass when any one of them is the alerts topic.
   assert {
     condition = alltrue([
       for s in data.aws_iam_policy_document.deployer.statement :
-      !contains(tolist(s.actions), "events:PutTargets") || anytrue([
-        for c in s.condition : c.test == "StringEquals" && c.variable == "events:TargetArn" &&
-        toset(c.values) == toset(["arn:aws:sns:us-west-2:793680745829:alerts"])
-      ])
+      !contains(tolist(s.actions), "events:PutTargets") || (
+        anytrue([
+          for c in s.condition : c.test == "ForAllValues:ArnEquals" && c.variable == "events:TargetArn" &&
+          toset(c.values) == toset(["arn:aws:sns:us-west-2:793680745829:alerts"])
+        ]) &&
+        anytrue([
+          for c in s.condition : c.test == "Null" && c.variable == "events:TargetArn" && toset(c.values) == toset(["false"])
+        ])
+      )
     ])
-    error_message = "The stop rule may only target the alerts topic."
+    error_message = "Every target the stop rule gets must be the alerts topic."
   }
 }
 

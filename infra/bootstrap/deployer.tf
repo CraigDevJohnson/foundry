@@ -522,15 +522,23 @@ data "aws_iam_policy_document" "deployer" {
     resources = [local.rules]
   }
 
+  # events:TargetArn holds every target in the request, so each must be the
+  # alerts topic (ForAllValues), and a request must name one (Null).
   statement {
     sid       = "StopRuleTargetsOnlyAlerts"
     actions   = ["events:PutTargets"]
     resources = [local.rules]
 
     condition {
-      test     = "StringEquals"
+      test     = "ForAllValues:ArnEquals"
       variable = "events:TargetArn"
       values   = [local.alerts_topic_arn]
+    }
+
+    condition {
+      test     = "Null"
+      variable = "events:TargetArn"
+      values   = ["false"]
     }
   }
 
