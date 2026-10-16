@@ -125,6 +125,17 @@ itself on port 80. The current certificate expires on 2026-11-17.
   in `/etc/systemd/system/certbot-renew.timer.d/override.conf`. Certbot renews
   only when the certificate is close to expiry, by default about 30 days
   before.
+- The host is usually off at 10:00 UTC, so the override also sets
+  `Persistent=true`: a run missed while the host was off happens within
+  15 minutes of the next start. A renewal then restarts Foundry (below), so
+  anyone who joined in those minutes is briefly disconnected.
+- User data writes the override only at first boot, and OpenTofu ignores later
+  changes to it, so a host built before `Persistent=true` was added keeps its
+  old override. On such a host the timer catches up only if the certbot
+  package's own timer is persistent. `systemctl show certbot-renew.timer -p
+  Persistent` prints `Persistent=yes` if it is. If it prints `Persistent=no`,
+  add `Persistent=true` under `[Timer]` in the override, then run
+  `sudo systemctl daemon-reload`.
 - After a renewal, the deploy hook `/usr/local/sbin/foundry-cert-deploy`,
   linked from `/etc/letsencrypt/renewal-hooks/deploy/foundry.sh`, copies
   `fullchain.pem` and `privkey.pem` to `/foundry/foundrydata/Config/foundry.pem`
@@ -137,6 +148,7 @@ as above:
 
 ```sh
 systemctl is-enabled certbot-renew.timer                # enabled
+systemctl show certbot-renew.timer -p Persistent        # Persistent=yes
 systemctl list-timers certbot-renew.timer --no-pager    # shows the next run
 journalctl -u certbot-renew.service -n 20 --no-pager    # recent runs
 ```
@@ -144,7 +156,7 @@ journalctl -u certbot-renew.service -n 20 --no-pager    # recent runs
 ```sh
 aws ssm send-command --profile workloads-admin \
   --instance-ids i-05dfb9abbc1caac32 --document-name AWS-RunShellScript \
-  --parameters '{"commands":["systemctl is-enabled certbot-renew.timer","systemctl list-timers certbot-renew.timer --no-pager","journalctl -u certbot-renew.service -n 20 --no-pager"]}' \
+  --parameters '{"commands":["systemctl is-enabled certbot-renew.timer","systemctl show certbot-renew.timer -p Persistent","systemctl list-timers certbot-renew.timer --no-pager","journalctl -u certbot-renew.service -n 20 --no-pager"]}' \
   --query Command.CommandId --output text
 ```
 
