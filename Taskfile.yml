@@ -152,7 +152,8 @@ tasks:
       of that fails, the host is left running. Make sure nobody is playing
       first: this disconnects everyone.
 
-      This is not End session: it takes no session backup.
+      This is End session. It takes no backup of its own; the next scheduled
+      snapshot holds the finished session.
     vars: *host-vars
     preconditions: *one-host
     status:

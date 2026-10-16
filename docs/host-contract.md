@@ -1,5 +1,16 @@
 # Host setup and lifecycle contract
 
+> **Not what the workloads host runs.** Foundry moved to an OpenTofu-built host
+> in the workloads account on 2026-09-29 instead of adopting the old host, and
+> issue #10 was closed as not planned. That host installs
+> `host/templates/foundry.service` as `infra/host.tf` edits it (no
+> `foundry-host preflight` line, `/usr/bin/node-24`, `Restart=on-failure`), so
+> the unit template is still a deployed input. No `foundry-host` wrapper is
+> installed: the host mounts `/foundry` by its volume ID and renews its
+> certificate with `certbot-renew.timer`, whose deploy hook restarts Foundry.
+> For the current host see [operations](operations.md). Apart from the unit
+> template, this contract describes the offline tools in `host/`.
+
 Contract version 1 implements the offline slice in [issue #5](https://github.com/CraigDevJohnson/foundry/issues/5).
 [Adoption and rollback](host-adoption.md) is a separate, human-authorized live
 procedure under issue #10. No installer, licensed application, private key,

@@ -14,6 +14,17 @@ status: accepted
 > The Lobby's site, not the portfolio, calls the controller, with signed
 > requests to an `AWS_IAM` Function URL instead of a server-side Lambda invoke.
 
+> **Start and stop superseded on 2026-10-14** by [ADR 0006](0006-the-lobby-starts-and-stops-the-host.md):
+> The Lobby's start is one EC2 `StartInstances` and its stop the `foundry-stop`
+> Run Command document, with no Automation runbook, DynamoDB table or
+> operation ID. On 2026-10-16 Craig made that stop End session, with no backup
+> of its own, and planned no service restart or on-demand snapshot (issue #7).
+> OpenTofu, not Terraform, defines the infrastructure. The rule below
+> that the backend replace the portfolio's direct EC2 lifecycle authority no
+> longer applies, because The Lobby holds none (ADR 0005); any the portfolio
+> still holds goes with it at The Lobby's cutover (aws-design §6.1, §6.2 and
+> §13).
+
 Use a privately invoked Go Lambda controller and Systems Manager Automation
 runbooks, with Terraform defining the infrastructure and service setup. This
 fits the portfolio's existing Go and AWS integration and keeps management
