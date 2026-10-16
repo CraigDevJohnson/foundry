@@ -3,13 +3,17 @@
 The management plane for Craig's hosted Foundry Virtual Tabletop (Foundry VTT)
 application and the AWS EC2 instance that runs it.
 
-This repository will own the tools for operating that installation. The first
-release serves Craig as its sole operator and supports a game with at most five
-concurrent users. The Lobby (craigdevjohnson.com) provides the management
-interface on its `/foundry` page; this repository owns the Foundry backend,
-operations, and reproducible host and service setup. The operating policy and
-backend architecture were confirmed through the design interview on
-2026-09-08.
+This repository owns the tools for operating that installation. The first
+release supports a game with at most five concurrent users. Craig operates it,
+and The Lobby's site lets any Member with its `foundry` or `foundry-admin`
+grant start and stop the host too
+([ADR 0006](docs/adr/0006-the-lobby-starts-and-stops-the-host.md)). The Lobby
+is the interface: its `/foundry` page shows invited players the host's status,
+and a later page will offer start and stop. It runs at next.craigdevjohnson.com
+until it takes over craigdevjohnson.com from the portfolio. This repository
+owns the Foundry backend, operations, and reproducible host and service setup.
+The operating policy and backend architecture were confirmed through the design
+interview on 2026-09-08; the ADRs below record where the backend changed since.
 
 ## Agreed first-release scope
 
@@ -18,8 +22,9 @@ backend architecture were confirmed through the design interview on
   play or solo GM preparation, then back up the installation before stopping it.
 - Restart the Foundry VTT service separately from the host.
 - Back up the installation and verify that it can be recovered.
-- Define how to recreate the host and service configuration, adopting the
-  existing host carefully after its configuration and backups are verified.
+- Define how to recreate the host and service configuration. OpenTofu builds
+  the host in the workloads account ([infra](infra/README.md)); Foundry moved
+  to it on 2026-09-29 instead of adopting the old host.
 
 ## Operating priorities
 
@@ -44,15 +49,22 @@ backend architecture were confirmed through the design interview on
   24 hours; there is no recovery Region, cross-Region copy, vault lock or legal
   hold ([aws-design §6.2 and §9.3](https://github.com/CraigDevJohnson/aws-setup/blob/main/aws-design.md#62-foundry-game-server-repo-foundry)).
 - Test a restore once after the snapshot policy is set up. There is no
-  restore-drill calendar.
+  restore-drill calendar. That test passed on 2026-09-29, from a manual
+  post-migration snapshot of the data volume
+  ([aws-setup #30](https://github.com/CraigDevJohnson/aws-setup/issues/30)).
 - Keep costs appropriate for a small personal game server. No fixed monthly cap
   has been chosen; proposals must explain any increase to the current operating
   cost.
 
-The backend's implementation and integration contracts remain engineering work.
-Live adoption must address the service supervision and renewal findings in the
-hosting baseline and demonstrate startup, backup, and recovery before the
-management plane is relied upon.
+The controller reports the host's status and starts and stops it
+([status API](docs/status-api.md)). Foundry moved to a new host in the
+workloads account on 2026-09-29 instead of adopting the old one
+([move record](docs/operations.md#move-record)): `foundry.service` runs Foundry
+and starts with the host, `certbot-renew.timer` is enabled and passed a dry
+run, and a restore from a snapshot was tested. The first real certificate
+renewal is due from about 2026-10-18. End session's backup and the service
+restart are not built; their scope is open in
+[#7](https://github.com/CraigDevJohnson/foundry/issues/7).
 
 ## Project documentation
 
@@ -63,10 +75,13 @@ management plane is relied upon.
 - [Hosting baseline](docs/hosting-baseline.md) is historical: the old
   management-account host and related management tools as found in discovery.
 - [Host lifecycle contract](docs/host-contract.md) defines the pinned inputs,
-  filesystem paths, fixed commands, and offline checks for issue #5.
+  filesystem paths, fixed commands, and offline checks for issue #5. The
+  workloads host follows it only for its `foundry.service` template, which
+  [infra/host.tf](infra/host.tf) edits.
 - [Local recovery sets](docs/local-recovery-sets.md) describes the fixture-tested capture,
-  integrity verification and isolated materialization tools; cloud protection and
-  live restore remain pending.
+  integrity verification and isolated materialization tools. They are offline
+  only: Data Lifecycle Manager snapshots replaced the cloud recovery sets they
+  were built for.
 - [Host adoption and rollback](docs/host-adoption.md) is historical: the
   adoption procedure for the old host, replaced by the move to workloads.
 - [First-release specification](https://github.com/CraigDevJohnson/foundry/issues/2)
@@ -84,7 +99,8 @@ management plane is relied upon.
   records how changes reach AWS: a Deploy run Craig starts and approves, which
   applies only the plan he read, as a role that can't step outside Foundry.
 - [Backend architecture](docs/adr/0003-serverless-management-backend.md) records
-  the accepted Go Lambda and Systems Manager implementation direction.
+  the Go Lambda controller direction; its notes mark the parts later replaced
+  (recovery storage, invocation, and The Lobby's start and stop).
 - [Status API](docs/status-api.md) documents the controller's HTTP interface:
   `GET /server`, which The Lobby's site serves at `/api/foundry/server` for its
   `/foundry` page, and `POST /server/start` and `POST /server/stop` for its
@@ -94,7 +110,7 @@ management plane is relied upon.
 
 Use a branch and pull request for changes to `main`. The security workflow scans
 Git history and current files for secrets and checks GitHub Actions workflows.
-Dependabot checks GitHub Actions dependencies weekly.
+Dependabot checks Go modules and GitHub Actions dependencies weekly.
 
 Run `python3 -m unittest discover -s tests -v` for the offline host contract
 suite. The Host contract workflow also parses the systemd templates without
@@ -112,9 +128,10 @@ through an `AWS_IAM` Function URL, one function per Lobby site environment
 [infra/controller.tf](infra/controller.tf)); `task run` serves it on your
 computer with your AWS credentials. It reads EC2, the Systems Manager agent,
 Foundry's join page and the stop recorded on the host. Local recovery-set
-capture/validation/materialization is now available for offline testing;
-cloud backups, session operations and live recovery remain tracked in the
-[first-release backlog](https://github.com/CraigDevJohnson/foundry/issues/2).
+capture/validation/materialization is available for offline testing. Backups
+are the Data Lifecycle Manager snapshots ([infra](infra/README.md)); End
+session's backup and the service restart are not built, and their scope is
+open in [#7](https://github.com/CraigDevJohnson/foundry/issues/7).
 
 Use Go 1.27.2 or newer and [Task](https://taskfile.dev) 3.x, and run `task ci`
 for formatting, vet, race-enabled tests, a Linux ARM64 Lambda build, and

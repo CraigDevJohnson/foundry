@@ -45,8 +45,9 @@ These are plain host start and stop, not the Start session and End session
 actions in [CONTEXT.md](../CONTEXT.md): stop takes no session backup, so the
 latest recovery point is the last scheduled snapshot. End session, which backs
 up first and keeps the host running if the backup fails, is separate work.
-The Lobby can start and stop the host too, through the controller
-([below](#the-lobbys-controller)).
+The Lobby's site can start and stop the host too, through the controller
+([below](#the-lobbys-controller)), but no page offers it yet: `/foundry` shows
+only the status.
 
 The Taskfile's host tasks find the host by its `Name=foundry` and
 `project=foundry` tags, so they keep working after a rebuild. Locally they use
@@ -275,7 +276,8 @@ enters it on `/license`. It never goes in Git, chat or logs.
 ## Move record
 
 Foundry moved from the hand-built host in the management account to this host
-in refactor Phases 7-9 (aws-setup `docs/refactor-plan.md`).
+in refactor Phases 7-9 ([aws-setup #30](https://github.com/CraigDevJohnson/aws-setup/issues/30);
+its plan, `docs/refactor-plan.md`, is in that repo's history).
 
 - **2026-09-29, cutover.** `/foundry` and `/etc/letsencrypt` were copied from
   the old host through the temporary `foundry-migration-793680745829` bucket,
@@ -289,9 +291,14 @@ in refactor Phases 7-9 (aws-setup `docs/refactor-plan.md`).
   DNS-only A record for `52.27.248.145`. `certbot renew --dry-run` then
   succeeded on the new host.
 - **2026-09-29 20:54 UTC, old host stopped.** `i-01b0381fb22db508f` in
-  management (180294223248). Refactor Phase 9 deletes it and its hand-built
-  resources, and removes the interim OpenTofu resources (`mgmt_interim.tf`)
-  and the transfer bucket (`migration.tf`).
+  management (180294223248).
+- **2026-09-29, Phase 9.** A restore test from a post-migration snapshot of the
+  data volume passed. The world folders and user files of the old "pre-character
+  updates" snapshot were copied to `foundrydata/Backups/pre-character-updates`.
+  The old host, its hand-built resources and all 8 management snapshots were
+  deleted, and foundry #18 removed the interim OpenTofu resources
+  (`mgmt_interim.tf`) and the transfer bucket (`migration.tf`)
+  ([aws-setup #30](https://github.com/CraigDevJohnson/aws-setup/issues/30)).
 
 New host at the move: instance `i-05dfb9abbc1caac32` (t4g.small, us-west-2a),
 Elastic IP `52.27.248.145` (`eipalloc-03508fd8e37c5f068`), data volume
@@ -307,7 +314,8 @@ environment (`infra/controller.tf`; deploying it is in
 agent's connectivity, whether `/join` answers and whether a stop is under way.
 A Member with the site's `foundry` or `foundry-admin` grant can also start and stop the host
 through it ([ADR 0006](adr/0006-the-lobby-starts-and-stops-the-host.md),
-[status API](status-api.md)). A start is an EC2 start. A stop, once the Member
+[status API](status-api.md)), though no Lobby page offers that yet: `/foundry`
+shows only the status. A start is an EC2 start. A stop, once the Member
 confirms nobody is playing, sends the `foundry-stop` document: the same
 shutdown as `host:stop` (above) and, only if that succeeds, a power-off a
 minute later, which EC2 turns into a stop because the host's

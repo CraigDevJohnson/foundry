@@ -30,12 +30,14 @@ _Avoid_: Foundry VTT (when referring to the machine)
 
 **Operator**:
 The person responsible for managing the hosted installation and its host.
-Craig is the sole operator for the first release.
+Craig is the operator. Any Member with The Lobby's `foundry` or `foundry-admin`
+grant may also start and stop the host (ADR 0006).
 _Avoid_: Player (when referring to management authority)
 
 **Player**:
 A person using the hosted Foundry VTT application for tabletop play. Participation
-in a game does not itself grant management authority.
+in a game does not itself grant management authority; a Member's Foundry grant
+in The Lobby does, for start and stop only.
 
 **Foundry VTT service**:
 The running Foundry VTT application on the host. Restarting this service is a
@@ -61,9 +63,9 @@ captured during End session, preserving the completed play or preparation work.
 _Avoid_: World backup (when the copy covers the installation rather than one world)
 
 **Scheduled recovery point**:
-A periodic recovery copy triggered independently of End session, subject to
-application-consistent capture. It does not count as a session backup even if it
-contains completed session state.
+A Data Lifecycle Manager snapshot of both volumes, taken daily and weekly
+whether or not Foundry is running, so it holds the data as of the snapshot. It
+does not count as a session backup even if it contains completed session state.
 
 **Pre-upgrade backup**:
 A recovery copy captured before an upgrade and retained until the operator
