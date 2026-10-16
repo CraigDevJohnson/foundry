@@ -4,7 +4,8 @@ name: Host control
 # tasks with the foundry-host-control-ci role (infra/bootstrap/roles.tf,
 # its permissions in infra/ci.tf). Stop shuts Foundry down with
 # /foundry/stop_foundry.sh before stopping the instance.
-# Stop is not End session: it takes no session backup.
+# Stop is End session. It takes no backup of its own; the next scheduled
+# snapshot holds the finished session.
 
 on:
   workflow_dispatch:

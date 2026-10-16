@@ -167,7 +167,8 @@ are ignored. Anything else answers `400` with
   stop the Member asks for waits on the host for the first and ends the same
   way.
 
-A stop takes no backup; it is not End session. The command has a 60-second
+A stop is End session and takes no backup of its own; the next scheduled
+snapshot holds the finished session. The command has a 60-second
 delivery timeout and gives the shutdown 5 minutes to run. AWS's documentation
 differs on when an undelivered command expires: SendCommand's reference says
 one that hasn't started within the delivery timeout won't run, and Systems

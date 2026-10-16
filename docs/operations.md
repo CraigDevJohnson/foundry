@@ -41,10 +41,10 @@ aws ssm get-command-invocation --profile workloads-admin \
 
 ## Start and stop
 
-These are plain host start and stop, not the Start session and End session
-actions in [CONTEXT.md](../CONTEXT.md): stop takes no session backup, so the
-latest recovery point is the last scheduled snapshot. End session, which backs
-up first and keeps the host running if the backup fails, is separate work.
+These are the Start session and End session actions in
+[CONTEXT.md](../CONTEXT.md). A stop takes no backup of its own: the latest
+recovery point is the last scheduled snapshot, and the next one holds the
+finished session (Craig's choice, 2026-10-16, [#7](https://github.com/CraigDevJohnson/foundry/issues/7)).
 The Lobby's site can start and stop the host too, through the controller
 ([below](#the-lobbys-controller)), but no page offers it yet: `/foundry` shows
 only the status.
@@ -125,17 +125,19 @@ itself on port 80. The current certificate expires on 2026-11-17.
   in `/etc/systemd/system/certbot-renew.timer.d/override.conf`. Certbot renews
   only when the certificate is close to expiry, by default about 30 days
   before.
-- The host is usually off at 10:00 UTC, so the override also sets
-  `Persistent=true`: a run missed while the host was off happens within
-  15 minutes of the next start. A renewal then restarts Foundry (below), so
-  anyone who joined in those minutes is briefly disconnected.
-- User data writes the override only at first boot, and OpenTofu ignores later
-  changes to it, so a host built before `Persistent=true` was added keeps its
-  old override. On such a host the timer catches up only if the certbot
+- The host may be off at 10:00 UTC between sessions, so user data's override
+  also sets `Persistent=true`: a run missed while the host was off happens
+  within 15 minutes of the next start. A renewal then restarts Foundry
+  (below), so anyone who joined in those minutes is briefly disconnected.
+- User data runs only at first boot, and OpenTofu ignores later changes to it.
+  The host above was built on 2026-09-29, before `Persistent=true` was added,
+  so its override lacks the line, and its timer catches up only if the certbot
   package's own timer is persistent. `systemctl show certbot-renew.timer -p
   Persistent` prints `Persistent=yes` if it is. If it prints `Persistent=no`,
   add `Persistent=true` under `[Timer]` in the override, then run
-  `sudo systemctl daemon-reload`.
+  `sudo systemctl daemon-reload` and `sudo systemctl restart
+  certbot-renew.timer`. The restart records when the timer started; without
+  that record the next boot has nothing to catch up from.
 - After a renewal, the deploy hook `/usr/local/sbin/foundry-cert-deploy`,
   linked from `/etc/letsencrypt/renewal-hooks/deploy/foundry.sh`, copies
   `fullchain.pem` and `privkey.pem` to `/foundry/foundrydata/Config/foundry.pem`

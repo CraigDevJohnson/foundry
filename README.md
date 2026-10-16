@@ -19,8 +19,8 @@ interview on 2026-09-08; the ADRs below record where the backend changed since.
 
 - View the status of the host and Foundry VTT application.
 - Provide explicit Start session and End session actions: start the host for
-  play or solo GM preparation, then back up the installation before stopping it.
-- Restart the Foundry VTT service separately from the host.
+  play or solo GM preparation, then shut Foundry down cleanly and stop the
+  host. The scheduled snapshots back up the finished session.
 - Back up the installation and verify that it can be recovered.
 - Define how to recreate the host and service configuration. OpenTofu builds
   the host in the workloads account ([infra](infra/README.md)); Foundry moved
@@ -34,14 +34,16 @@ interview on 2026-09-08; the ADRs below record where the backend changed since.
 - Schedule disruptive maintenance outside play.
 - Take a manual snapshot of both volumes before upgrades. Upgrade automation
   itself has not been selected for the first release.
-- Protect every completed session. Loss of progress from a session in progress
-  is acceptable if storage fails; recover with a tested, guided restore.
+- Protect completed sessions with the scheduled snapshots: a finished session
+  is in the next daily snapshot, up to about 24 hours later. Loss of progress
+  since the last snapshot is acceptable if storage fails; recover with the
+  documented restore.
 - Use manual session controls initially; automatic idle shutdown and a fixed
   start/stop schedule are outside the agreed first-release scope.
-- Require the operator to confirm that nobody will be interrupted before
-  End session or a service restart. Automatic player detection is not required.
-- If End session cannot confirm a successful backup, keep the host running,
-  report the failure, and require a successful retry before normal shutdown.
+- Require confirmation that nobody will be interrupted before End session.
+  Automatic player detection is not required.
+- If End session cannot shut Foundry down cleanly, keep the host running and
+  report the failure.
 - Back up both EBS volumes with a Data Lifecycle Manager policy in us-west-2:
   daily snapshots at 10:00 UTC keeping 7, and weekly snapshots on Sundays at
   11:00 UTC keeping 4 ([infra](infra/README.md)). Keep each manual pre-upgrade
@@ -57,14 +59,18 @@ interview on 2026-09-08; the ADRs below record where the backend changed since.
   cost.
 
 The controller reports the host's status and starts and stops it
-([status API](docs/status-api.md)). Foundry moved to a new host in the
+([status API](docs/status-api.md)). A stop, from The Lobby or from Host
+control, shuts Foundry down cleanly before the host stops: that is End session.
+It takes no backup of its own. Craig dropped the backup step on 2026-10-16
+([#7](https://github.com/CraigDevJohnson/foundry/issues/7)), so the scheduled
+snapshots hold a finished session. Foundry moved to a new host in the
 workloads account on 2026-09-29 instead of adopting the old one
 ([move record](docs/operations.md#move-record)): `foundry.service` runs Foundry
-and starts with the host, `certbot-renew.timer` is enabled and passed a dry
-run, and a restore from a snapshot was tested. The first real certificate
-renewal is due from about 2026-10-18. End session's backup and the service
-restart are not built; their scope is open in
-[#7](https://github.com/CraigDevJohnson/foundry/issues/7).
+and starts with the host, `certbot-renew.timer` is enabled and a
+`certbot renew --dry-run` passed, and a restore from a snapshot was tested.
+The first real certificate renewal is due from about 2026-10-18. What is left
+to prove on the live host is in
+[#25](https://github.com/CraigDevJohnson/foundry/issues/25).
 
 ## Project documentation
 
@@ -85,7 +91,9 @@ restart are not built; their scope is open in
 - [Host adoption and rollback](docs/host-adoption.md) is historical: the
   adoption procedure for the old host, replaced by the move to workloads.
 - [First-release specification](https://github.com/CraigDevJohnson/foundry/issues/2)
-  contains the consolidated scope, acceptance checks, and adoption prerequisites.
+  records the original scope, acceptance checks, and adoption prerequisites. It
+  closed on 2026-10-16; [#25](https://github.com/CraigDevJohnson/foundry/issues/25)
+  holds the live checks still to run.
 - [Portfolio and Foundry responsibilities](docs/adr/0001-portfolio-and-foundry-responsibilities.md)
   records the management boundary. Its portfolio interface is superseded by
   [The Lobby calls the controller through a Function URL](docs/adr/0005-the-lobby-calls-the-controller-through-a-function-url.md).
@@ -130,8 +138,7 @@ computer with your AWS credentials. It reads EC2, the Systems Manager agent,
 Foundry's join page and the stop recorded on the host. Local recovery-set
 capture/validation/materialization is available for offline testing. Backups
 are the Data Lifecycle Manager snapshots ([infra](infra/README.md)); End
-session's backup and the service restart are not built, and their scope is
-open in [#7](https://github.com/CraigDevJohnson/foundry/issues/7).
+session takes no backup of its own ([#7](https://github.com/CraigDevJohnson/foundry/issues/7)).
 
 Use Go 1.27.2 or newer and [Task](https://taskfile.dev) 3.x, and run `task ci`
 for formatting, vet, race-enabled tests, a Linux ARM64 Lambda build, and

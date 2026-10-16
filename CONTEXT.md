@@ -49,23 +49,26 @@ A period of tabletop play or solo GM preparation on the hosted Foundry VTT
 installation.
 
 **Start session**:
-The operator-requested action that starts the host for play or preparation.
+The action that starts the host for play or preparation.
 _Avoid_: Launch world (which concerns activity inside Foundry VTT)
 
 **End session**:
-The operator-requested action that backs up the installation before stopping
-the host after play or preparation. A failed backup prevents normal shutdown.
-_Avoid_: Stop (when the backup step is part of the requested action)
+The action that shuts Foundry down cleanly and then stops the host after play
+or preparation. If the shutdown fails, the host keeps running. It takes no
+backup of its own: the next scheduled recovery point holds the finished
+session.
+_Avoid_: Power off (when Foundry has not been shut down first)
 
 **Session backup**:
-A recovery copy of the hosted installation's required data and configuration
-captured during End session, preserving the completed play or preparation work.
+A recovery copy captured during End session. None is taken: Craig dropped the
+step on 2026-10-16 (issue #7), and older documents that name it describe the
+earlier plan.
 _Avoid_: World backup (when the copy covers the installation rather than one world)
 
 **Scheduled recovery point**:
 A Data Lifecycle Manager snapshot of both volumes, taken daily and weekly
-whether or not Foundry is running, so it holds the data as of the snapshot. It
-does not count as a session backup even if it contains completed session state.
+whether or not Foundry is running, so it holds the data as of the snapshot.
+The first one after a session is that session's backup.
 
 **Pre-upgrade backup**:
 A recovery copy captured before an upgrade and retained until the operator
