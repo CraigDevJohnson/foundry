@@ -209,13 +209,13 @@ run "host_instance_settings" {
       strcontains(aws_instance.host.user_data, "DATA_DEVICE='/dev/disk/by-id/nvme-Amazon_Elastic_Block_Store_vol0123456789abcdef0'"),
       strcontains(aws_instance.host.user_data, "echo \"$DATA_DEVICE /foundry ext4 defaults,nofail 0 2\" >>/etc/fstab"),
       strcontains(aws_instance.host.user_data, "ExecStart=/usr/bin/node-24 /foundry/foundryvtt/main.js"),
-      strcontains(aws_instance.host.user_data, "OnCalendar=*-*-* 10:00:00 UTC"),
+      strcontains(aws_instance.host.user_data, "OnCalendar=*-*-* 10:00:00 UTC\nPersistent=true\n"),
       strcontains(aws_instance.host.user_data, "systemctl enable --now certbot-renew.timer"),
       strcontains(aws_instance.host.user_data, "/etc/letsencrypt/renewal-hooks/deploy/foundry.sh"),
       strcontains(aws_instance.host.user_data, "systemctl try-restart foundry.service"),
       strcontains(aws_instance.host.user_data, "\nRestart=on-failure\nRestartSec=5\n"),
     ])
-    error_message = "User data must install Node.js 24 and certbot, the fstab entry for the data volume ID, the unit with Restart=on-failure, the timer override and the deploy hook."
+    error_message = "User data must install Node.js 24 and certbot, the fstab entry for the data volume ID, the unit with Restart=on-failure, the timer override that catches up a missed run at boot, and the deploy hook."
   }
 
   assert {

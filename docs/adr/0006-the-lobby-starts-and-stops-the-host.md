@@ -91,3 +91,6 @@ is logged with it, as ADR 0005 planned.
   the dev site can stop the host that production shows.
 - Start session and End session (CONTEXT.md), with a backup before the stop,
   are still separate work. This stop takes no backup, like `task host:stop`.
+  On 2026-10-16 Craig dropped that backup (issue #7): this start and stop are
+  Start session and End session, and the scheduled snapshots hold a finished
+  session.

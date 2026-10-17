@@ -9,9 +9,9 @@ locals {
   node_bin = "/usr/bin/node-24"
 
   # D15: a plain systemd unit, so the host-contract preflight line is dropped.
-  # D16: the host is always on and nothing else restarts Foundry, so a crash
-  # restarts it after 5 seconds, as on the old host. A clean `systemctl stop`
-  # never restarts it.
+  # Nothing else supervises Foundry while the host runs, so a crash restarts
+  # it after 5 seconds, as on the old host. A clean `systemctl stop` never
+  # restarts it.
   foundry_unit_source = file("${path.module}/../host/templates/foundry.service")
   foundry_unit = replace(
     replace(

@@ -99,12 +99,16 @@ install -d -m 0755 /etc/letsencrypt/renewal-hooks/deploy
 ln -sfn /usr/local/sbin/foundry-cert-deploy /etc/letsencrypt/renewal-hooks/deploy/foundry.sh
 
 # --- Renewal timer: daily at 10:00 UTC with 15 minutes of jitter ---
-# Before the restore there is no certificate, so a run does nothing.
+# Before the restore there is no certificate, so a run does nothing. The host
+# may be off at 10:00 UTC between sessions, so Persistent=true runs a missed
+# renewal at the next boot instead of waiting for a 10:00 UTC the host is up
+# for. It is set here rather than left to the certbot package's own timer.
 install -d -m 0755 /etc/systemd/system/certbot-renew.timer.d
 cat >/etc/systemd/system/certbot-renew.timer.d/override.conf <<'TIMER'
 [Timer]
 OnCalendar=
 OnCalendar=*-*-* 10:00:00 UTC
+Persistent=true
 RandomizedDelaySec=15m
 TIMER
 
