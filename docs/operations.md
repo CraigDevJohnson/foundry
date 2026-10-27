@@ -117,7 +117,8 @@ changes only if the address does. To change it:
 
 Certbot keeps the Let's Encrypt certificate in `/etc/letsencrypt` on the root
 volume. It uses the standalone authenticator, which answers the challenge
-itself on port 80. The current certificate expires on 2026-11-17.
+itself on port 80. The certificate was renewed on 2026-10-27 and expires on
+2027-01-25; the next renewal is due from about 2026-12-26.
 
 - `certbot-renew.timer` must be enabled. On the old host it was found
   disabled.
@@ -131,9 +132,10 @@ itself on port 80. The current certificate expires on 2026-11-17.
   (below), so anyone who joined in those minutes is briefly disconnected.
 - User data runs only at first boot, and OpenTofu ignores later changes to it.
   The host above was built on 2026-09-29, before `Persistent=true` was added,
-  so its override lacks the line, and its timer catches up only if the certbot
-  package's own timer is persistent. `systemctl show certbot-renew.timer -p
-  Persistent` prints `Persistent=yes` if it is. If it prints `Persistent=no`,
+  so its override lacks the line. The certbot package's own timer unit sets
+  `Persistent=true`, so `systemctl show certbot-renew.timer -p Persistent`
+  printed `Persistent=yes` on 2026-10-27, and the run missed that morning was
+  scheduled within 15 minutes of the start. If it ever prints `Persistent=no`,
   add `Persistent=true` under `[Timer]` in the override, then run
   `sudo systemctl daemon-reload` and `sudo systemctl restart
   certbot-renew.timer`. The restart records when the timer started; without
@@ -164,8 +166,9 @@ aws ssm send-command --profile workloads-admin \
 
 From anywhere, this prints the served certificate's expiry. The timer only
 runs while the host is up, so the date changes at the first run, or catch-up
-at boot, after 2026-10-18 with the host running. If it still shows 2026-11-17
-after such a run, the renewal failed: read the journal.
+at boot, once the certificate is within 30 days of expiry with the host
+running. If the date is still within 30 days after such a run, the renewal
+failed: read the journal.
 
 ```sh
 openssl s_client -connect foundry.craigdevjohnson.com:30000 \
@@ -179,7 +182,8 @@ renews only when the certificate is due, and the deploy hook then restarts
 Foundry.
 
 `scripts/live-checks.py` does the whole check from Craig's computer in one
-sitting, for [#25](https://github.com/CraigDevJohnson/foundry/issues/25): it
+sitting (first run on 2026-10-27, recorded on
+[#25](https://github.com/CraigDevJohnson/foundry/issues/25)): it
 starts the host with Host control, reads the timer and the hook through Run
 Command with `workloads-admin`, adds `Persistent=true` and relinks the hook
 if they are missing, renews now, checks `/join` and the served certificate
