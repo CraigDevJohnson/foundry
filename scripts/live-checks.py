@@ -10,8 +10,9 @@ found, and the run ends with a Markdown record you can post on the issue.
      a browser, when they do not).
   2. Finds the host by its tags and records its state.
   3. Starts the host with the Host control workflow (action=start), which
-     also waits until /join answers. A host that is already running is only
-     checked, after you confirm nobody is playing.
+     also waits until Foundry answers; the script then waits for /join to
+     answer 200. A host that is already running or starting is only checked,
+     after you confirm nobody is playing.
   4. Reads the host through Run Command with workloads-admin: /foundry
      mounted, foundry.service active, certbot-renew.timer enabled and
      persistent with a next run, its unit files, the last runs, the deploy
@@ -70,6 +71,8 @@ HOOK_DIR = '/etc/letsencrypt/renewal-hooks/deploy'
 HOOK_LINK = f'{HOOK_DIR}/foundry.sh'
 LINEAGE = f'/etc/letsencrypt/live/{HOSTNAME}/fullchain.pem'
 SERVED_CERT = '/foundry/foundrydata/Config/foundry.pem'
+# Host control runs this script dispatched, for the message when it stops early.
+DISPATCHED = []
 
 
 class Failure(Exception):
@@ -265,6 +268,7 @@ def host_control(action, instance_id, nobody_playing=False):
         'ref': 'main',
         'inputs': {'action': action, 'nobody_playing': 'true' if nobody_playing else 'false'},
     })
+    DISPATCHED.append(f'{action} (run not found yet)')
     run_info = None
     for _ in range(36):
         time.sleep(5)
@@ -279,6 +283,7 @@ def host_control(action, instance_id, nobody_playing=False):
                       f'The host is {host_state_or_unknown(instance_id)}; watch '
                       f'https://github.com/{REPO}/actions/workflows/{WORKFLOW}')
     print(f'Run {run_info["id"]}: {run_info["html_url"]}')
+    DISPATCHED[-1] = f'{action} ({run_info["html_url"]})'
     deadline = time.monotonic() + 60 * 60
     last = None
     while run_info['status'] != 'completed':
@@ -351,7 +356,7 @@ def run_on_host(instance_id, comment, script, timeout=900):
 
 # A read. Its exit status is always 0: the Python decides what passed.
 CHECK_SCRIPT = f'''\
-echo "== renew in progress"; n=0; while systemctl is-active -q certbot-renew.service && [ $n -lt 120 ]; do n=$((n+1)); sleep 5; done; echo "waited $n"
+echo "== renew in progress"; n=0; while s=$(systemctl is-active certbot-renew.service); [ "$s" = activating ] || [ "$s" = active ] || [ "$s" = deactivating ]; do n=$((n+1)); [ $n -lt 120 ] || break; sleep 5; done; echo "waited $n"
 echo "== findmnt /foundry"; findmnt -n -o SOURCE,FSTYPE,OPTIONS /foundry || echo "NOT MOUNTED"
 echo "== foundry.service"; for i in $(seq 1 12); do s=$(systemctl is-active foundry.service); [ "$s" = activating ] || break; sleep 5; done; echo "$s"
 echo "== certbot-renew.timer enabled"; systemctl is-enabled certbot-renew.timer || true
@@ -361,12 +366,12 @@ echo "== last result"; systemctl show certbot-renew.service -p Result --value
 echo "== unit files"; systemctl cat certbot-renew.timer certbot-renew.service --no-pager
 echo "== next run"; systemctl list-timers certbot-renew.timer --no-pager --all
 echo "== last runs"; journalctl -u certbot-renew.service -n 20 --no-pager
-echo "== hook script"; ls -l {HOOK_SCRIPT} 2>&1
-echo "== hook target"; readlink -f {HOOK_LINK} 2>&1
+echo "== hook script"; if [ -x {HOOK_SCRIPT} ]; then echo executable; else echo "missing or not executable"; fi
+echo "== hook target"; if [ -L {HOOK_LINK} ]; then readlink -f {HOOK_LINK}; elif [ -e {HOOK_LINK} ]; then echo "a plain file, not a link"; else echo missing; fi
 echo "== hook entries"; ls -A1 {HOOK_DIR} 2>&1
 echo "== certificates"; certbot certificates 2>&1
-echo "== lineage"; openssl x509 -noout -enddate -in {LINEAGE} 2>&1
-echo "== served file"; openssl x509 -noout -enddate -in {SERVED_CERT} 2>&1
+echo "== lineage"; openssl x509 -noout -enddate -fingerprint -sha256 -in {LINEAGE} 2>&1
+echo "== served file"; openssl x509 -noout -enddate -fingerprint -sha256 -in {SERVED_CERT} 2>&1
 exit 0
 '''
 
@@ -396,8 +401,8 @@ RENEW_SCRIPT = f'''\
 systemctl start certbot-renew.service; rc=$?; echo "== renew exit"; echo "$rc"
 echo "== journal"; journalctl -u certbot-renew.service -n 30 --no-pager
 echo "== certificates"; certbot certificates 2>&1
-echo "== lineage"; openssl x509 -noout -enddate -in {LINEAGE} 2>&1
-echo "== served file"; openssl x509 -noout -enddate -in {SERVED_CERT} 2>&1
+echo "== lineage"; openssl x509 -noout -enddate -fingerprint -sha256 -in {LINEAGE} 2>&1
+echo "== served file"; openssl x509 -noout -enddate -fingerprint -sha256 -in {SERVED_CERT} 2>&1
 echo "== foundry.service"; for i in $(seq 1 24); do s=$(systemctl is-active foundry.service); [ "$s" = activating ] || break; sleep 5; done; echo "$s"
 exit 0
 '''
@@ -423,6 +428,12 @@ def not_after(text):
 
 def day(when):
     return f'{when:%Y-%m-%d}' if when else 'unreadable'
+
+
+def fingerprint(text):
+    """The value of openssl's `sha256 Fingerprint=AB:CD:...` line, or None."""
+    match = re.search(r'Fingerprint=([0-9A-Fa-f:]+)', text)
+    return match.group(1).upper() if match else None
 
 
 def package_sets_persistent(unit_files):
@@ -479,17 +490,19 @@ def foundry_status():
 def checks(args, record, instance_id, initial_state):
     """Every step after the host is known. Raises Failure to stop early."""
     record.note(f'The host was `{initial_state}` when the run began.')
-    if initial_state == 'running':
-        answer = ask_one_of('The host is already running. Is anyone playing or preparing?', ['y', 'n'])
+    already_up = initial_state in ('running', 'pending')
+    if already_up:
+        answer = ask_one_of(f'The host is already {initial_state}. Is anyone playing or preparing?',
+                            ['y', 'n'])
         if answer == 'y':
             raise Failure('Nothing to do during a session: run this again after it ends')
 
     # 1. Start session (part 2 of the issue: EC2 reaches running, /join answers)
     start_url = host_control('start', instance_id)
     state = host_state(instance_id)
-    if initial_state == 'running':
+    if already_up:
         record.note(f'Host control start only confirmed that Foundry answers, since the host was '
-                    f'already running ({start_url}); the stopped-to-running step was not exercised.')
+                    f'already {initial_state} ({start_url}); the stopped-to-running step was not exercised.')
     else:
         record.check(state == 'running',
                      f'EC2 reaches `running` after Host control start from `{initial_state}` ({start_url})')
@@ -510,7 +523,9 @@ def checks(args, record, instance_id, initial_state):
     from_package = package_sets_persistent(section(output, 'unit files'))
     record.note(f'Before any fix: `{persistent}`; the certbot package\'s own timer unit '
                 f'{"sets" if from_package else "does not set"} `Persistent=true`.')
-    hook_ok = section(output, 'hook target') == HOOK_SCRIPT
+    script_ok = section(output, 'hook script') == 'executable'
+    hook_target = section(output, 'hook target')
+    hook_ok = script_ok and hook_target == HOOK_SCRIPT
     hook_entries = [e for e in section(output, 'hook entries').splitlines() if e]
     before_lineage = not_after(section(output, 'lineage'))
     before_served = not_after(section(output, 'served file'))
@@ -532,14 +547,16 @@ def checks(args, record, instance_id, initial_state):
         record.check(True, '`certbot-renew.timer` is persistent (no change needed)')
         next_elapse = section(output, 'next elapse')
     record.check(next_elapse not in ('', 'n/a'), f'The timer has a next run (`{next_elapse or "none"}`)')
-    if not hook_ok:
+    if not script_ok:
+        record.check(False, f'`{HOOK_SCRIPT}` is missing or not executable: user data installs it, '
+                            'so the host was not built as expected; nothing relinked')
+    elif not hook_ok:
         relinked = run_on_host(instance_id, 'Relink the certificate deploy hook', FIX_HOOK_SCRIPT)
         record.check(section(relinked, 'hook target') == HOOK_SCRIPT,
-                     f'Relinked `{HOOK_LINK}` to `{HOOK_SCRIPT}` (it was '
-                     f'`{section(output, "hook target") or "missing"}`)')
+                     f'Relinked `{HOOK_LINK}` to `{HOOK_SCRIPT}` (it was {hook_target or "missing"})')
         hook_entries = [e for e in section(relinked, 'hook entries').splitlines() if e]
     else:
-        record.check(True, f'`{HOOK_LINK}` links to `{HOOK_SCRIPT}`')
+        record.check(True, f'`{HOOK_LINK}` links to `{HOOK_SCRIPT}`, which is executable')
     extras = [e for e in hook_entries if e != 'foundry.sh' and 'No such file' not in e]
     record.check(not extras, '`foundry.sh` is the only entry in the deploy hook directory'
                  + (f' (also found: {", ".join(extras)}; remove them by hand)' if extras else ''))
@@ -552,7 +569,8 @@ def checks(args, record, instance_id, initial_state):
         exit_code = section(renewed, 'renew exit')
         lineage = not_after(section(renewed, 'lineage'))
         served_file = not_after(section(renewed, 'served file'))
-        if lineage is not None and before_lineage is not None and lineage > before_lineage:
+        renewed_now = lineage is not None and before_lineage is not None and lineage > before_lineage
+        if renewed_now:
             record.check(True, f'Certbot renewed the certificate in this run (lineage expires {day(lineage)})')
         elif lineage is not None and lineage.date() > CURRENT_EXPIRY:
             record.check(True, f'The certificate was already renewed before this run (lineage expires '
@@ -560,11 +578,13 @@ def checks(args, record, instance_id, initial_state):
         else:
             record.check(False, f'Certbot did not renew the certificate (lineage expires {day(lineage)}, '
                                 f'certbot-renew.service exited {exit_code or "?"}): read the journal above')
-        record.check(served_file is not None and served_file == lineage,
-                     f'`Config/foundry.pem` carries the same certificate as the lineage '
-                     f'(expires {day(served_file)})')
+        same = fingerprint(section(renewed, 'lineage'))
+        record.check(same is not None and same == fingerprint(section(renewed, 'served file')),
+                     f'`Config/foundry.pem` holds the lineage\'s certificate (same SHA-256 fingerprint, '
+                     f'expires {day(served_file)})')
         record.check(section(renewed, 'foundry.service') == 'active',
-                     '`foundry.service` is active after the deploy hook')
+                     '`foundry.service` is active after the deploy hook restarted it' if renewed_now
+                     else '`foundry.service` is active (no renewal was due, so the hook did not run)')
         record.check(join_answers(5), '`/join` answers 200 after the renewal')
 
     # 5. What the world sees
@@ -586,7 +606,7 @@ def checks(args, record, instance_id, initial_state):
         print('  - both worlds open (Return to Setup, launch the other world, then back);')
         print('  - the GM login works;')
         print('  - a player can join and a change saves (part 3 of the issue), if you have one handy.')
-        for text in ('Both worlds open', 'GM login and a player join-and-save (part 3)'):
+        for text in ('Both worlds open', 'GM login', 'A player joined and a change saved (part 3)'):
             answer = ask_one_of(f'{text}:', ['pass', 'fail', 'skip'])
             if answer == 'skip':
                 record.note(f'{text}: not checked in this run.')
@@ -645,20 +665,29 @@ def main():
             reason = str(exc)
         else:
             reason = f'unexpected error: {exc!r}'
-        record.note(f'The run stopped early: {reason}. The host was `{state}` at that point.')
+        # The record may be posted publicly: keep the first line only, without role ARNs.
+        public = re.sub(r'arn:aws[^\s]*', 'arn:...', reason.splitlines()[0] if reason else reason)
+        record.note(f'The run stopped early: {public}. The host was `{state}` at that point.')
+        if DISPATCHED:
+            record.note('Host control runs dispatched by this run: ' + '; '.join(DISPATCHED) + '.')
         write_record(record, started, instance_id, 'The run stopped early; see the last note.')
         print(f'\nStopped: {reason}', file=sys.stderr)
         print(f'The host is {state}.', file=sys.stderr)
-        if state != 'stopped':
-            print('When the session is over, end it with Host control (stop, nobody playing): '
+        if state != 'stopped' or any(d.startswith('start') for d in DISPATCHED):
+            print('A Host control start may still be running or the host may be up. When the session '
+                  'is over, end it with Host control (stop, nobody playing): '
                   f'https://github.com/{REPO}/actions/workflows/{WORKFLOW}', file=sys.stderr)
         if not isinstance(exc, (Failure, KeyboardInterrupt)):
             raise
         return 130 if isinstance(exc, KeyboardInterrupt) else 1
     path = write_record(record, started, instance_id, 'Every step ran.')
-    if ask_one_of(f'Post this as a comment on {REPO}#{ISSUE}?', ['y', 'n']) == 'y':
-        run(['gh', 'issue', 'comment', str(ISSUE), '--repo', REPO, '--body-file', path])
-        print('Posted.')
+    try:
+        if ask_one_of(f'Post this as a comment on {REPO}#{ISSUE}?', ['y', 'n']) == 'y':
+            run(['gh', 'issue', 'comment', str(ISSUE), '--repo', REPO, '--body-file', path])
+            print('Posted.')
+    except (Failure, KeyboardInterrupt) as exc:
+        print(f'\nNot posted ({exc if isinstance(exc, Failure) else "interrupted"}); the record is at '
+              f'{path}. The host is {host_state_or_unknown(instance_id)}.', file=sys.stderr)
     return 0
 
 
@@ -670,5 +699,6 @@ if __name__ == '__main__':
         print(f'\nStopped: {exc}', file=sys.stderr)
         sys.exit(1)
     except KeyboardInterrupt:
+        # Before the host is known: nothing has been started.
         print('\nInterrupted before anything ran on the host.', file=sys.stderr)
         sys.exit(130)
