@@ -68,10 +68,10 @@ workloads account on 2026-09-29 instead of adopting the old one
 ([move record](docs/operations.md#move-record)): `foundry.service` runs Foundry
 and starts with the host, `certbot-renew.timer` is enabled and a
 `certbot renew --dry-run` passed, and a restore from a snapshot was tested.
-The first real certificate renewal is due from about 2026-10-18. What is left
-to prove on the live host is in
+The first real certificate renewal, a start and stop cycle through Host
+control, and the game check ran on 2026-10-27, recorded on
 [#25](https://github.com/CraigDevJohnson/foundry/issues/25);
-`scripts/live-checks.py` runs those checks from Craig's computer
+`scripts/live-checks.py` repeats those checks from Craig's computer
 ([certificate renewal](docs/operations.md#certificate-renewal)).
 
 ## Project documentation
@@ -95,7 +95,7 @@ to prove on the live host is in
 - [First-release specification](https://github.com/CraigDevJohnson/foundry/issues/2)
   records the original scope, acceptance checks, and adoption prerequisites. It
   closed on 2026-10-16; [#25](https://github.com/CraigDevJohnson/foundry/issues/25)
-  holds the live checks still to run.
+  records the live checks, run on 2026-10-27.
 - [Portfolio and Foundry responsibilities](docs/adr/0001-portfolio-and-foundry-responsibilities.md)
   records the management boundary. Its portfolio interface is superseded by
   [The Lobby calls the controller through a Function URL](docs/adr/0005-the-lobby-calls-the-controller-through-a-function-url.md).
