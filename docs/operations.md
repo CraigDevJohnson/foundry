@@ -162,14 +162,31 @@ aws ssm send-command --profile workloads-admin \
   --query Command.CommandId --output text
 ```
 
-From anywhere, this prints the served certificate's expiry. If it still shows
-2026-11-17 after about 2026-10-25, the renewal failed: read the journal.
+From anywhere, this prints the served certificate's expiry. The timer only
+runs while the host is up, so the date changes at the first run, or catch-up
+at boot, after 2026-10-18 with the host running. If it still shows 2026-11-17
+after such a run, the renewal failed: read the journal.
 
 ```sh
 openssl s_client -connect foundry.craigdevjohnson.com:30000 \
   -servername foundry.craigdevjohnson.com </dev/null 2>/dev/null |
   openssl x509 -noout -enddate
 ```
+
+To renew without waiting for the timer, start the timer's service on the host
+while nobody is playing: `sudo systemctl start certbot-renew.service`. Certbot
+renews only when the certificate is due, and the deploy hook then restarts
+Foundry.
+
+`scripts/live-checks.py` does the whole check from Craig's computer in one
+sitting, for [#25](https://github.com/CraigDevJohnson/foundry/issues/25): it
+starts the host with Host control, reads the timer and the hook through Run
+Command with `workloads-admin`, adds `Persistent=true` and relinks the hook
+if they are missing, renews now, checks `/join` and the served certificate
+from outside, waits for the browser checks, ends the session with Host
+control, and writes a record to post on the issue. Every command it runs is
+printed first; `--no-renew`, `--keep-running` and `--no-browser-pause` skip
+the matching steps.
 
 ## Snapshot before an upgrade
 

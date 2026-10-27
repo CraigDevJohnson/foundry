@@ -70,7 +70,9 @@ and starts with the host, `certbot-renew.timer` is enabled and a
 `certbot renew --dry-run` passed, and a restore from a snapshot was tested.
 The first real certificate renewal is due from about 2026-10-18. What is left
 to prove on the live host is in
-[#25](https://github.com/CraigDevJohnson/foundry/issues/25).
+[#25](https://github.com/CraigDevJohnson/foundry/issues/25);
+`scripts/live-checks.py` runs those checks from Craig's computer
+([certificate renewal](docs/operations.md#certificate-renewal)).
 
 ## Project documentation
 
