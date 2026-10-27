@@ -270,13 +270,24 @@ def host_control(action, instance_id, nobody_playing=False):
     })
     DISPATCHED.append(f'{action} (run not found yet)')
     run_info = None
+    seen = set()
     for _ in range(36):
         time.sleep(5)
         runs = gh_api_retry(f'repos/{REPO}/actions/workflows/{WORKFLOW}/runs'
                             '?event=workflow_dispatch&per_page=5')
-        newer = [r for r in runs['workflow_runs'] if r['id'] > watermark]
-        if newer:
-            run_info = min(newer, key=lambda r: r['id'])
+        newer = sorted((r for r in runs['workflow_runs'] if r['id'] > watermark and r['id'] not in seen),
+                       key=lambda r: r['id'])
+        # Ours is the first run above the watermark whose job is "Host <action>"; another
+        # dispatch in the same seconds (a status check from the Actions tab) is skipped.
+        for candidate in newer:
+            jobs = gh_api_retry(f'repos/{REPO}/actions/runs/{candidate["id"]}/jobs')
+            if any(j['name'] == f'Host {action}' for j in jobs['jobs']):
+                run_info = candidate
+                break
+            if jobs['jobs']:
+                seen.add(candidate['id'])
+                print(f'  run {candidate["id"]} is another host operation; skipping it')
+        if run_info:
             break
     if not run_info:
         raise Failure('The workflow was dispatched but no run appeared within three minutes. '
@@ -395,6 +406,16 @@ install -d -m 0755 {HOOK_DIR}
 ln -sfn {HOOK_SCRIPT} {HOOK_LINK}
 echo "== hook target"; readlink -f {HOOK_LINK}
 echo "== hook entries"; ls -A1 {HOOK_DIR}
+'''
+
+# Copies the lineage into Config and restarts Foundry, as certbot's deploy hook
+# would have, for a certificate the timer renewed while the hook link was missing.
+DEPLOY_SCRIPT = f'''\
+{HOOK_SCRIPT}; rc=$?; echo "== deploy exit"; echo "$rc"
+echo "== lineage"; openssl x509 -noout -enddate -fingerprint -sha256 -in {LINEAGE} 2>&1
+echo "== served file"; openssl x509 -noout -enddate -fingerprint -sha256 -in {SERVED_CERT} 2>&1
+echo "== foundry.service"; for i in $(seq 1 24); do s=$(systemctl is-active foundry.service); [ "$s" = activating ] || break; sleep 5; done; echo "$s"
+exit 0
 '''
 
 RENEW_SCRIPT = f'''\
@@ -564,25 +585,49 @@ def checks(args, record, instance_id, initial_state):
     # 4. Renew now
     if args.no_renew:
         record.note('Renewal left to the timer (--no-renew).')
+        if fingerprint(section(output, 'lineage')) != fingerprint(section(output, 'served file')) \
+                and section(output, 'lineage').startswith('notAfter='):
+            after = run_on_host(instance_id, 'Copy the renewed certificate into Config', DEPLOY_SCRIPT)
+            record.check(section(after, 'deploy exit') == '0',
+                         'Ran `foundry-cert-deploy` by hand, since `Config/foundry.pem` was behind the '
+                         f'lineage (exit {section(after, "deploy exit") or "?"})')
+            record.check(fingerprint(section(after, 'lineage')) is not None and
+                         fingerprint(section(after, 'lineage')) == fingerprint(section(after, 'served file')),
+                         '`Config/foundry.pem` holds the lineage\'s certificate (same SHA-256 fingerprint, '
+                         f'expires {day(not_after(section(after, "served file")))})')
+            record.check(section(after, 'foundry.service') == 'active',
+                         '`foundry.service` is active after the deploy hook restarted it')
+            record.check(join_answers(5), '`/join` answers 200 after the restart')
     else:
         renewed = run_on_host(instance_id, 'Renew the certificate now', RENEW_SCRIPT, timeout=1200)
         exit_code = section(renewed, 'renew exit')
+        record.check(exit_code == '0', f'certbot-renew.service exited {exit_code or "?"}'
+                     + ('' if exit_code == '0' else ': read the journal above'))
         lineage = not_after(section(renewed, 'lineage'))
-        served_file = not_after(section(renewed, 'served file'))
         renewed_now = lineage is not None and before_lineage is not None and lineage > before_lineage
         if renewed_now:
             record.check(True, f'Certbot renewed the certificate in this run (lineage expires {day(lineage)})')
         elif lineage is not None and lineage.date() > CURRENT_EXPIRY:
             record.check(True, f'The certificate was already renewed before this run (lineage expires '
-                               f'{day(lineage)}); certbot-renew.service exited {exit_code or "?"}')
+                               f'{day(lineage)}), so nothing was due')
         else:
-            record.check(False, f'Certbot did not renew the certificate (lineage expires {day(lineage)}, '
-                                f'certbot-renew.service exited {exit_code or "?"}): read the journal above')
-        same = fingerprint(section(renewed, 'lineage'))
-        record.check(same is not None and same == fingerprint(section(renewed, 'served file')),
+            record.check(False, f'Certbot did not renew the certificate (lineage expires {day(lineage)}): '
+                                'read the journal above')
+        # The timer may have renewed while the hook link was missing: then Config still holds
+        # the old certificate and no renewal is due, so run the hook by hand.
+        after = renewed
+        if fingerprint(section(after, 'lineage')) != fingerprint(section(after, 'served file')) \
+                and section(after, 'lineage').startswith('notAfter='):
+            after = run_on_host(instance_id, 'Copy the renewed certificate into Config', DEPLOY_SCRIPT)
+            record.check(section(after, 'deploy exit') == '0',
+                         'Ran `foundry-cert-deploy` by hand, since `Config/foundry.pem` was behind the '
+                         f'lineage (exit {section(after, "deploy exit") or "?"})')
+            renewed_now = True  # the hook restarted Foundry
+        same = fingerprint(section(after, 'lineage'))
+        record.check(same is not None and same == fingerprint(section(after, 'served file')),
                      f'`Config/foundry.pem` holds the lineage\'s certificate (same SHA-256 fingerprint, '
-                     f'expires {day(served_file)})')
-        record.check(section(renewed, 'foundry.service') == 'active',
+                     f'expires {day(not_after(section(after, "served file")))})')
+        record.check(section(after, 'foundry.service') == 'active',
                      '`foundry.service` is active after the deploy hook restarted it' if renewed_now
                      else '`foundry.service` is active (no renewal was due, so the hook did not run)')
         record.check(join_answers(5), '`/join` answers 200 after the renewal')
