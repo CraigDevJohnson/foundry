@@ -390,7 +390,7 @@ FIX_TIMER_SCRIPT = f'''\
 set -e
 f={OVERRIDE}
 test -f "$f" || {{ echo "$f is missing; the host was not built by user data as expected" >&2; exit 1; }}
-grep -q '^Persistent=' "$f" || sed -i '/^\\[Timer\\]/a Persistent=true' "$f"
+if grep -q '^Persistent=' "$f"; then sed -i 's/^Persistent=.*/Persistent=true/' "$f"; else sed -i '/^\\[Timer\\]/a Persistent=true' "$f"; fi
 systemctl daemon-reload
 systemctl restart certbot-renew.timer
 echo "== override"; cat "$f"
@@ -562,7 +562,7 @@ def checks(args, record, instance_id, initial_state):
     if persistent != 'Persistent=yes':
         fixed = run_on_host(instance_id, 'Make certbot-renew.timer persistent', FIX_TIMER_SCRIPT)
         record.check(section(fixed, 'persistent') == 'Persistent=yes',
-                     'Added `Persistent=true` to the timer override, reloaded and restarted the timer')
+                     'Set `Persistent=true` in the timer override, reloaded and restarted the timer')
         next_elapse = section(fixed, 'next elapse')
     else:
         record.check(True, '`certbot-renew.timer` is persistent (no change needed)')
