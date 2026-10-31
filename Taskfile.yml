@@ -177,6 +177,64 @@ tasks:
       - aws ec2 wait instance-stopped --region {{.AWS_REGION}} --instance-ids {{.INSTANCE_ID}}
       - echo 'Host {{.INSTANCE_ID}} is stopped'
 
+  host:proxy:
+    desc: Set up the reverse proxy on the host with the foundry-proxy-setup document, then check https://foundry.craigdevjohnson.com
+    summary: |
+      Run the foundry-proxy-setup document on the host through SSM Run
+      Command (infra/ci.tf, ADR 0008). On the host it installs the deployed
+      proxy scripts, sets nginx up for https://foundry.craigdevjohnson.com,
+      points Foundry's options.json at the proxy and restarts Foundry only if
+      that changed, tests the certificate renewal through nginx, and checks
+      /join through nginx. This task then checks /join from here, which
+      needs the Deploy apply that opens 443 in the security group.
+
+      A stopped host is started first and, since nobody could have been
+      playing on it, stopped again at the end (End session). A running host
+      is left running: Foundry restarts if its options change, so make sure
+      nobody is playing first. Running it again changes nothing.
+    vars: *host-vars
+    preconditions: *one-host
+    cmds:
+      - cmd: |
+          case '{{.HOST_STATE}}' in
+            running) ;;
+            pending)
+              aws ec2 wait instance-running --region {{.AWS_REGION}} --instance-ids {{.INSTANCE_ID}} || exit 1
+              ;;
+            stopping)
+              aws ec2 wait instance-stopped --region {{.AWS_REGION}} --instance-ids {{.INSTANCE_ID}} || exit 1
+              aws ec2 start-instances --region {{.AWS_REGION}} --instance-ids {{.INSTANCE_ID}} --output text || exit 1
+              aws ec2 wait instance-running --region {{.AWS_REGION}} --instance-ids {{.INSTANCE_ID}} || exit 1
+              ;;
+            *)
+              aws ec2 start-instances --region {{.AWS_REGION}} --instance-ids {{.INSTANCE_ID}} --output text || exit 1
+              aws ec2 wait instance-running --region {{.AWS_REGION}} --instance-ids {{.INSTANCE_ID}} || exit 1
+              ;;
+          esac
+      - task: host:run-document
+        vars:
+          INSTANCE_ID: '{{.INSTANCE_ID}}'
+          DOCUMENT: foundry-proxy-setup
+          COMMENT: Set up the reverse proxy for https://foundry.craigdevjohnson.com
+          WAIT_TRIES: '180'
+          FAILURE: read its output above; the host is left running
+      - cmd: |
+          deadline=$(( $(date +%s) + 300 ))
+          code=
+          while [ "$(date +%s)" -lt "$deadline" ]; do
+            code=$(curl -sS -o /dev/null -w '%{http_code}' --max-time 10 '{{.FOUNDRY_URL}}/join' 2>/dev/null || true)
+            if [ "$code" = 200 ]; then
+              echo 'Foundry answers at {{.FOUNDRY_URL}}/join'
+              exit 0
+            fi
+            sleep 5
+          done
+          echo "{{.FOUNDRY_URL}}/join did not answer 200 from here within 5 minutes (last: ${code:-no connection}), though it did on the host. If the security group still opens 30000 instead of 443, run the Deploy apply for the proxy change; the host is left running." >&2
+          exit 1
+        silent: true
+      - task: host:stop
+        if: test '{{.HOST_STATE}}' = stopped
+
   host:shutdown-foundry:
     internal: true
     requires:
@@ -184,6 +242,19 @@ tasks:
     preconditions:
       - sh: test '{{.HOST_STATE}}' = running
         msg: 'Host {{.INSTANCE_ID}} is {{.HOST_STATE}}; Foundry can only be shut down while it is running'
+    cmds:
+      - task: host:run-document
+        vars:
+          INSTANCE_ID: '{{.INSTANCE_ID}}'
+          DOCUMENT: foundry-shutdown
+          COMMENT: Shut down Foundry before stopping the host
+          WAIT_TRIES: '80'
+          FAILURE: the host is still running
+
+  host:run-document:
+    internal: true
+    requires:
+      vars: [INSTANCE_ID, DOCUMENT, COMMENT, WAIT_TRIES, FAILURE]
     cmds:
       - cmd: |
           # A host that has just booted may not have registered with SSM yet,
@@ -194,9 +265,9 @@ tasks:
           command_id=
           for i in $(seq 1 24); do
             if command_id=$(aws ssm send-command --region {{.AWS_REGION}} \
-              --instance-ids {{.INSTANCE_ID}} --document-name foundry-shutdown \
+              --instance-ids {{.INSTANCE_ID}} --document-name {{.DOCUMENT}} \
               --document-version '$LATEST' \
-              --comment 'Shut down Foundry before stopping the host' \
+              --comment '{{.COMMENT}}' \
               --query Command.CommandId --output text 2>"$err"); then
               break
             fi
@@ -206,12 +277,12 @@ tasks:
           done
           if [ -z "$command_id" ]; then
             cat "$err" >&2
-            echo 'Could not send the Foundry shutdown; the host is still running' >&2
+            echo 'Could not send the {{.DOCUMENT}} document; {{.FAILURE}}' >&2
             exit 1
           fi
-          echo "Shutting down Foundry (command $command_id)"
+          echo "Running {{.DOCUMENT}} on the host (command $command_id)"
           status=Pending
-          for i in $(seq 1 80); do
+          for i in $(seq 1 {{.WAIT_TRIES}}); do
             sleep 5
             status=$(aws ssm get-command-invocation --region {{.AWS_REGION}} \
               --instance-id {{.INSTANCE_ID}} --command-id "$command_id" \
@@ -225,7 +296,7 @@ tasks:
             --instance-id {{.INSTANCE_ID}} --command-id "$command_id" \
             --query '[StandardOutputContent, StandardErrorContent]' --output text || true
           if [ "$status" != Success ]; then
-            echo "Foundry shutdown ended with status $status; the host is still running" >&2
+            echo "{{.DOCUMENT}} ended with status $status; {{.FAILURE}}" >&2
             exit 1
           fi
         silent: true

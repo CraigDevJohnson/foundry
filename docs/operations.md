@@ -79,12 +79,14 @@ still starting it waits for it to boot, then shuts down as usual.
 with the host.
 
 The **Host control** workflow in GitHub Actions runs the same tasks. Start it
-from the Actions tab, pick `status`, `start` or `stop`, and for `stop` tick
-**nobody playing**. It runs in the `foundry-host` GitHub Environment and
+from the Actions tab, pick `status`, `start`, `stop` or `proxy`, and for
+`stop` and `proxy` tick **nobody playing**. `proxy` runs the
+`foundry-proxy-setup` document ([The reverse proxy](#the-reverse-proxy)). It runs in the `foundry-host` GitHub Environment and
 assumes `foundry-host-control-ci` through the workloads GitHub OIDC provider.
 `infra/bootstrap/roles.tf` makes the role and `infra/ci.tf` sets what it may
 do: only describe instances, start and stop this instance, and run the
-`foundry-shutdown` document on it, never arbitrary commands. Setup, once the role is applied:
+`foundry-shutdown` and `foundry-proxy-setup` documents on it, never
+arbitrary commands. Setup, once the role is applied:
 
 1. Create the `foundry-host` environment under the repository's
    Settings > Environments. Set **Deployment branches** to `main` only: the
@@ -213,6 +215,13 @@ writes `/etc/nginx/nginx.conf`, `/etc/nginx/conf.d/foundry-http.conf` and,
 once the certificate exists, `/etc/nginx/conf.d/foundry-https.conf`; running
 it again rewrites them, so change the templates in Git, not the files. User
 data installs and runs it on a rebuild ([infra](../infra/README.md#rebuilding-the-host)).
+On a built host, a change to the proxy scripts arrives through the
+`foundry-proxy-setup` document (`infra/ci.tf`): Host control's `proxy`
+action, or `AWS_PROFILE=workloads-admin task host:proxy`, after the Deploy
+run that updates the document. It installs the deployed scripts, runs the
+setup, sets Foundry's options and restarts Foundry only if they changed, so
+tick **nobody playing**. A stopped host is started for it and stopped again
+after.
 
 Foundry's side is in `/foundry/foundrydata/Config/options.json` on the data
 volume: `proxyPort` 443, `proxySSL` true, and `sslCert` and `sslKey` null, so
@@ -236,61 +245,38 @@ from nginx, which the controller reports as not responding.
 
 ### Moving the host built on 2026-09-29 to the proxy
 
-User data runs only at first boot, so the current host gets the proxy by
-hand, once, while nobody is playing: Foundry restarts to pick up its new
-options, which disconnects everyone. It is one Session Manager sitting with
-`workloads-admin`, so an agent runs it only as a change Craig has approved.
-Do it before the Deploy run that closes port 30000 (below), from `main` once
-this change is merged; until then, Host control's start waits for
-`https://foundry.craigdevjohnson.com/`, which the host doesn't answer yet, so
-start it with `aws ec2 start-instances` or let that wait fail (the host still
-starts).
+User data runs only at first boot, so the current host gets the proxy
+through the `foundry-proxy-setup` document, once, between sessions: Foundry
+restarts to pick up its new options, which disconnects everyone, and from
+the Deploy apply until the document has run, nobody can reach Foundry at
+all. Once this change is on `main`:
 
-1. Start the host and open a shell: `aws ssm start-session --profile
-   workloads-admin --target i-05dfb9abbc1caac32`, then `sudo -i`.
-2. Install the two scripts from `main` and run the setup. It installs nginx,
-   writes the configuration, serves 443 from the existing certificate, and
-   switches the renewal to the webroot with `certbot reconfigure`, which
-   tests the new way against Let's Encrypt's staging before saving it:
-
-   ```sh
-   curl -fsSL https://raw.githubusercontent.com/CraigDevJohnson/foundry/main/infra/templates/foundry-proxy-setup.sh -o /usr/local/sbin/foundry-proxy-setup
-   curl -fsSL https://raw.githubusercontent.com/CraigDevJohnson/foundry/main/infra/templates/foundry-cert-deploy.sh -o /usr/local/sbin/foundry-cert-deploy
-   chmod 0755 /usr/local/sbin/foundry-proxy-setup /usr/local/sbin/foundry-cert-deploy
-   /usr/local/sbin/foundry-proxy-setup
-   ```
-
-   It ends by saying `options.json` still has Foundry serving TLS itself,
-   which the next step fixes.
-3. Point Foundry at the proxy and restart it. The file keeps its owner, and
-   Foundry no longer reads the certificate copies, so they go too:
-
-   ```sh
-   python3 - <<'EOF'
-   import json, pathlib
-   path = pathlib.Path('/foundry/foundrydata/Config/options.json')
-   options = json.loads(path.read_text())
-   options.update({'proxyPort': 443, 'proxySSL': True, 'sslCert': None, 'sslKey': None})
-   path.write_text(json.dumps(options, indent=2) + '\n')
-   EOF
-   rm -f /foundry/foundrydata/Config/foundry.pem /foundry/foundrydata/Config/foundry.key
-   systemctl restart foundry.service
-   /usr/local/sbin/foundry-proxy-setup    # now silent about options.json
-   certbot renew --dry-run                # the challenge goes through nginx
-   ```
-
-4. From your computer, run the three `curl` checks above. The third
-   already fails: Foundry now speaks plain HTTP on 30000, so a TLS client
-   gets a protocol error there, and the Deploy run then closes the port
-   altogether. Then open `https://foundry.craigdevjohnson.com` in a browser,
+1. Run the Deploy workflow, plan then apply
+   ([infra](../infra/README.md#deploying)). The plan creates the
+   `foundry-proxy-setup` document and lets the Host control role send it,
+   replaces the 30000 ingress rule with 443, and points both controllers at
+   `https://foundry.craigdevjohnson.com/join`. Craig approves both runs.
+2. Run Host control with `proxy` and **nobody playing** ticked. It starts the
+   host if it is stopped, sends the document (nginx, the configuration, the
+   one-time `certbot reconfigure` to the webroot, Foundry's options and a
+   restart, `certbot renew --dry-run`, `/join` through nginx on the host),
+   then checks `/join` from GitHub, and stops the host again if it found it
+   stopped. Read the run's log: the document's output is printed in full.
+3. From your computer, run the three `curl` checks above (the third fails to
+   connect). Then open `https://foundry.craigdevjohnson.com` in a browser,
    log in as GM, launch a world and have a player join: the game's live
    connection is the WebSocket through nginx.
-5. Run the Deploy workflow ([infra](../infra/README.md#deploying)) for this
-   change: the plan replaces the 30000 ingress rule with 443 and points both
-   controllers at `https://foundry.craigdevjohnson.com/join`. After the
-   apply, the third `curl` fails to connect and `task host:status` reports
-   Foundry answering at the new address.
-6. End the session with Host control, and record the date here.
+4. Record the date here.
+
+If the workflow can't be used, the same thing by hand, in a Session Manager
+shell as root while nobody is playing (an agent runs it only as a change
+Craig has approved): install `infra/templates/foundry-proxy-setup.sh` and
+`foundry-cert-deploy.sh` from `main` as `/usr/local/sbin/foundry-proxy-setup`
+and `/usr/local/sbin/foundry-cert-deploy` (mode 0755), run
+`foundry-proxy-setup`, set `proxyPort` to 443, `proxySSL` to true and
+`sslCert` and `sslKey` to null in `/foundry/foundrydata/Config/options.json`,
+delete `Config/foundry.pem` and `foundry.key`, `systemctl restart
+foundry.service`, then `certbot renew --dry-run`.
 
 ## Snapshot before an upgrade
 

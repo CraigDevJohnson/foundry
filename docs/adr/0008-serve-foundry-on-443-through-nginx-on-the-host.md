@@ -61,6 +61,15 @@ weighed:
   `https://foundry.craigdevjohnson.com`. This is on the data volume, so the
   move sets it by hand once ([operations](../operations.md#the-reverse-proxy))
   and a rebuild inherits it.
+- The `foundry-proxy-setup` SSM document (`infra/ci.tf`), which the Host
+  control workflow's `proxy` action sends (`task host:proxy`): it installs
+  the commit's two proxy scripts on the host, runs the setup, sets Foundry's
+  options and restarts Foundry only if they changed, tests the renewal and
+  checks `/join` through nginx on the host. User data runs only at first
+  boot, so this is how the proxy reached the host built before it, and how a
+  later change to the scripts reaches a built host, without a shell on it.
+  It has no parameters, like `foundry-shutdown`, so the Host control role
+  still can't run arbitrary commands.
 - The security group opens 80 and 443 from anywhere and nothing else. The
   controller probes `https://foundry.craigdevjohnson.com/join`, and the
   Taskfile, the live-checks script and the docs use the same address.

@@ -1,0 +1,102 @@
+#!/bin/bash
+# The foundry-proxy-setup document (infra/ci.tf), which Host control's proxy
+# action sends (ADR 0008). User data runs only at first boot, so this is how
+# the reverse proxy reaches a host built before it, and how a later change to
+# the proxy scripts reaches a built host: it installs this commit's
+# foundry-proxy-setup and foundry-cert-deploy, runs the setup, points
+# Foundry's options.json at the proxy, restarts Foundry only if that changed,
+# tests the renewal, and checks /join through nginx on the host.
+#
+# It is idempotent: a run that finds everything in place changes nothing and
+# restarts nothing.
+set -euo pipefail
+
+hostname=foundry.craigdevjohnson.com
+options=/foundry/foundrydata/Config/options.json
+config_dir=/foundry/foundrydata/Config
+
+install_script() {
+  # $1 the destination; the script on stdin. A partial file never replaces
+  # a working one.
+  local dest=$1 tmp
+  tmp=$(mktemp "$dest.XXXXXX")
+  if ! cat >"$tmp"; then
+    rm -f "$tmp"
+    echo "foundry-proxy-setup document: could not write $dest" >&2
+    exit 1
+  fi
+  chmod 0755 "$tmp"
+  mv -f "$tmp" "$dest"
+}
+
+install_script /usr/local/sbin/foundry-proxy-setup <<'FOUNDRY_PROXY_SETUP'
+${proxy_setup}FOUNDRY_PROXY_SETUP
+
+install_script /usr/local/sbin/foundry-cert-deploy <<'FOUNDRY_CERT_DEPLOY'
+${cert_deploy}FOUNDRY_CERT_DEPLOY
+
+install -d -m 0755 /etc/letsencrypt/renewal-hooks/deploy
+ln -sfn /usr/local/sbin/foundry-cert-deploy /etc/letsencrypt/renewal-hooks/deploy/foundry.sh
+
+echo "== proxy setup"
+/usr/local/sbin/foundry-proxy-setup
+
+# --- Foundry's side: options.json on the data volume ---
+echo "== options.json"
+if [ ! -f "$options" ]; then
+  echo "$options is missing: is /foundry mounted and restored?" >&2
+  exit 1
+fi
+changed=$(python3 - "$options" <<'PY'
+import json, os, sys
+path = sys.argv[1]
+with open(path) as f:
+    options = json.load(f)
+wanted = {'proxyPort': 443, 'proxySSL': True, 'sslCert': None, 'sslKey': None}
+if all(options.get(k) == v for k, v in wanted.items()):
+    print('unchanged')
+    sys.exit(0)
+options.update(wanted)
+stat = os.stat(path)
+tmp = path + '.new'
+with open(tmp, 'w') as f:
+    json.dump(options, f, indent=2)
+    f.write('\n')
+os.chown(tmp, stat.st_uid, stat.st_gid)
+os.chmod(tmp, stat.st_mode & 0o7777)
+os.replace(tmp, path)
+print('changed')
+PY
+)
+echo "$changed"
+# Foundry no longer reads the copies the old deploy hook made.
+rm -f "$config_dir/foundry.pem" "$config_dir/foundry.key"
+if [ "$changed" = changed ]; then
+  echo "== foundry.service restart"
+  systemctl restart foundry.service
+fi
+
+# --- The renewal goes through nginx now ---
+echo "== certbot renew --dry-run"
+if [ -d "/etc/letsencrypt/live/$hostname" ]; then
+  certbot renew --dry-run
+else
+  echo "no certificate yet; nothing to test"
+fi
+
+# --- Through nginx, on the host ---
+echo "== /join through nginx"
+code=
+for _ in $(seq 1 60); do
+  code=$(curl -sS -o /dev/null -w '%%{http_code}' --max-time 10 \
+    --resolve "$hostname:443:127.0.0.1" "https://$hostname/join" 2>/dev/null || true)
+  if [ "$code" = 200 ]; then
+    break
+  fi
+  sleep 5
+done
+if [ "$code" != 200 ]; then
+  echo "https://$hostname/join answered $${code:-nothing} through nginx on the host; read the output above and the nginx and Foundry journals" >&2
+  exit 1
+fi
+echo "https://$hostname/join answers 200 through nginx on the host"

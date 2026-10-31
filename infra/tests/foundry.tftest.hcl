@@ -350,17 +350,48 @@ run "host_control_role_is_least_privilege" {
   assert {
     condition = alltrue([
       for r in flatten([for s in data.aws_iam_policy_document.host_control.statement : tolist(s.resources) if contains(tolist(s.actions), "ssm:SendCommand")]) :
-      !strcontains(r, ":document/") || r == "arn:aws:ssm:us-west-2:793680745829:document/foundry-shutdown"
+      !strcontains(r, ":document/") || contains([
+        "arn:aws:ssm:us-west-2:793680745829:document/foundry-shutdown",
+        "arn:aws:ssm:us-west-2:793680745829:document/foundry-proxy-setup",
+      ], r)
     ])
-    error_message = "SendCommand may use only the foundry-shutdown document, never AWS-RunShellScript."
+    error_message = "SendCommand may use only the foundry-shutdown and foundry-proxy-setup documents, never AWS-RunShellScript."
   }
 
   assert {
+    condition = alltrue([
+      for d in [aws_ssm_document.shutdown, aws_ssm_document.proxy_setup] :
+      d.document_type == "Command" && !strcontains(d.content, "\"parameters\"")
+    ])
+    error_message = "foundry-shutdown and foundry-proxy-setup must be Command documents with no parameters."
+  }
+
+  # The proxy document (ADR 0008) carries this commit's two proxy scripts and
+  # runs the setup, then points Foundry at the proxy and checks /join on the
+  # host; it restarts Foundry only when its options change.
+  assert {
     condition = (
-      aws_ssm_document.shutdown.document_type == "Command" &&
-      !strcontains(aws_ssm_document.shutdown.content, "\"parameters\"")
+      jsondecode(aws_ssm_document.proxy_setup.content).mainSteps[0].inputs.runCommand == [
+        templatefile("templates/foundry-proxy-apply.sh.tftpl", {
+          proxy_setup = file("templates/foundry-proxy-setup.sh")
+          cert_deploy = file("templates/foundry-cert-deploy.sh")
+        })
+      ] &&
+      jsondecode(aws_ssm_document.proxy_setup.content).mainSteps[0].inputs.timeoutSeconds == "900" &&
+      alltrue([
+        for wanted in [
+          "install_script /usr/local/sbin/foundry-proxy-setup <<'FOUNDRY_PROXY_SETUP'\n${file("templates/foundry-proxy-setup.sh")}FOUNDRY_PROXY_SETUP\n",
+          "install_script /usr/local/sbin/foundry-cert-deploy <<'FOUNDRY_CERT_DEPLOY'\n${file("templates/foundry-cert-deploy.sh")}FOUNDRY_CERT_DEPLOY\n",
+          "\n/usr/local/sbin/foundry-proxy-setup\n",
+          "wanted = {'proxyPort': 443, 'proxySSL': True, 'sslCert': None, 'sslKey': None}",
+          "if [ \"$changed\" = changed ]; then\n  echo \"== foundry.service restart\"\n  systemctl restart foundry.service\nfi\n",
+          "certbot renew --dry-run\n",
+          "--resolve \"$hostname:443:127.0.0.1\" \"https://$hostname/join\"",
+        ] :
+        strcontains(jsondecode(aws_ssm_document.proxy_setup.content).mainSteps[0].inputs.runCommand[0], wanted)
+      ])
     )
-    error_message = "foundry-shutdown must be a Command document with no parameters."
+    error_message = "foundry-proxy-setup must install both proxy scripts from this commit, run the setup, set Foundry's proxy options (restarting it only on a change), test the renewal and check /join through nginx on the host, within 900 seconds."
   }
 }
 
