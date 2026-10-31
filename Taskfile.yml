@@ -232,7 +232,10 @@ tasks:
           echo "{{.FOUNDRY_URL}}/join did not answer 200 from here within 5 minutes (last: ${code:-no connection}), though it did on the host. If the security group still opens 30000 instead of 443, run the Deploy apply for the proxy change; the host is left running." >&2
           exit 1
         silent: true
-      - task: host:stop
+      # In a fresh invocation: Task caches a dynamic variable's result for the
+      # whole run, so a nested host:stop would still see the state from before
+      # the start, `stopped`, and skip itself.
+      - cmd: '{{.TASK_EXE}} host:stop'
         if: test '{{.HOST_STATE}}' = stopped
 
   host:shutdown-foundry:
