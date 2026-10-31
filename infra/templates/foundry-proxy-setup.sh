@@ -147,10 +147,11 @@ if [ -f "$renewal_conf" ] && [ -z "${RENEWED_LINEAGE:-}" ] &&
 fi
 
 # --- Foundry's side, which this script never writes (it is on the data volume) ---
-if [ -r "$options_json" ]; then
+if [ -f "$options_json" ] && [ ! -L "$options_json" ]; then
   if ! python3 -c '
-import json, sys
-o = json.load(open(sys.argv[1]))
+import json, os, sys
+with os.fdopen(os.open(sys.argv[1], os.O_RDONLY | os.O_NOFOLLOW)) as f:
+    o = json.load(f)
 ok = o.get("proxyPort") == 443 and o.get("proxySSL") is True and o.get("sslCert") is None and o.get("sslKey") is None
 sys.exit(0 if ok else 1)
 ' "$options_json"; then

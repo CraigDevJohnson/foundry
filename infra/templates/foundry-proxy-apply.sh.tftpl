@@ -47,24 +47,34 @@ if [ ! -f "$options" ]; then
   echo "$options is missing: is /foundry mounted and restored?" >&2
   exit 1
 fi
+# This runs as root in a directory the foundry user owns, so it never follows
+# a link there: the file must be a regular file, and the replacement is made
+# with mkstemp (O_EXCL, no link following) and set up through its descriptor.
 changed=$(python3 - "$options" <<'PY'
-import json, os, sys
+import json, os, stat as st, sys, tempfile
 path = sys.argv[1]
-with open(path) as f:
+info = os.lstat(path)
+if not st.S_ISREG(info.st_mode):
+    sys.exit(f'{path} is not a regular file; refusing to touch it')
+fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW)
+with os.fdopen(fd) as f:
     options = json.load(f)
 wanted = {'proxyPort': 443, 'proxySSL': True, 'sslCert': None, 'sslKey': None}
 if all(options.get(k) == v for k, v in wanted.items()):
     print('unchanged')
     sys.exit(0)
 options.update(wanted)
-stat = os.stat(path)
-tmp = path + '.new'
-with open(tmp, 'w') as f:
-    json.dump(options, f, indent=2)
-    f.write('\n')
-os.chown(tmp, stat.st_uid, stat.st_gid)
-os.chmod(tmp, stat.st_mode & 0o7777)
-os.replace(tmp, path)
+fd, tmp = tempfile.mkstemp(prefix='options.json.', dir=os.path.dirname(path))
+try:
+    with os.fdopen(fd, 'w') as f:
+        json.dump(options, f, indent=2)
+        f.write('\n')
+        os.fchown(f.fileno(), info.st_uid, info.st_gid)
+        os.fchmod(f.fileno(), st.S_IMODE(info.st_mode))
+    os.replace(tmp, path)
+except BaseException:
+    os.unlink(tmp)
+    raise
 print('changed')
 PY
 )
