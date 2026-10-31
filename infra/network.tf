@@ -8,12 +8,13 @@ locals {
   # account; in workloads usw2-az2 is us-west-2a (read-only check, 2026-09-29).
   host_availability_zone_id = "usw2-az2"
 
-  # Player-facing ports, from anywhere on IPv4: 80 for certificate issuance and
-  # the redirect, 30000 for Foundry. The default VPC has no IPv6 CIDR, so there
-  # are no IPv6 rules.
+  # Player-facing ports, from anywhere on IPv4: 80 for certbot's challenge and
+  # the redirect to HTTPS, 443 for Foundry through nginx (ADR 0008). Foundry's
+  # own port, 30000, is reached only from the host, so the proxy is the one
+  # way in. The default VPC has no IPv6 CIDR, so there are no IPv6 rules.
   public_ingress_ports = {
-    http    = 80
-    foundry = 30000
+    http  = 80
+    https = 443
   }
 }
 

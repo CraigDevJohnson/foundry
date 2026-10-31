@@ -72,14 +72,19 @@ The first real certificate renewal, a start and stop cycle through Host
 control, and the game check ran on 2026-10-27, recorded on
 [#25](https://github.com/CraigDevJohnson/foundry/issues/25);
 `scripts/live-checks.py` repeats those checks from Craig's computer
-([certificate renewal](docs/operations.md#certificate-renewal)).
+([certificate renewal](docs/operations.md#certificate-renewal)). Players
+open `https://foundry.craigdevjohnson.com` with no port: nginx on the host
+answers 443 and hands requests to Foundry on 30000, which the security group
+no longer opens ([ADR 0008](docs/adr/0008-serve-foundry-on-443-through-nginx-on-the-host.md),
+[the reverse proxy](docs/operations.md#the-reverse-proxy)).
 
 ## Project documentation
 
 - [Domain glossary](CONTEXT.md) defines the project's terms.
 - [Operations](docs/operations.md) covers running the workloads host: start
   and stop (`task host:start`, `task host:stop` and the Host control workflow), DNS,
-  certificate renewal, snapshots, restores, the license and the move record.
+  certificate renewal, the reverse proxy, snapshots, restores, the license
+  and the move record.
 - [Hosting baseline](docs/hosting-baseline.md) is historical: the old
   management-account host and related management tools as found in discovery.
 - [Host lifecycle contract](docs/host-contract.md) defines the pinned inputs,
@@ -108,6 +113,9 @@ control, and the game check ran on 2026-10-27, recorded on
 - [Deploy from GitHub Actions](docs/adr/0007-deploy-from-github-actions.md)
   records how changes reach AWS: a Deploy run Craig starts and approves, which
   applies only the plan he read, as a role that can't step outside Foundry.
+- [Serve Foundry on 443 through nginx on the host](docs/adr/0008-serve-foundry-on-443-through-nginx-on-the-host.md)
+  records why the public address has no port: nginx on the host, not
+  Cloudflare's proxy or a load balancer, and what it changed.
 - [Backend architecture](docs/adr/0003-serverless-management-backend.md) records
   the Go Lambda controller direction; its notes mark the parts later replaced
   (recovery storage, invocation, and The Lobby's start and stop).

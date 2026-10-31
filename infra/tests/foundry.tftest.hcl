@@ -100,9 +100,9 @@ run "security_group_opens_only_player_ports" {
       "${r.ip_protocol}/${r.from_port}-${r.to_port}/${r.cidr_ipv4}"
       ]) == toset([
       "tcp/80-80/0.0.0.0/0",
-      "tcp/30000-30000/0.0.0.0/0",
+      "tcp/443-443/0.0.0.0/0",
     ]) && length(aws_vpc_security_group_ingress_rule.public) == 2
-    error_message = "Ingress must be exactly 80/tcp and 30000/tcp from 0.0.0.0/0: no SSH, no /32 rule."
+    error_message = "Ingress must be exactly 80/tcp and 443/tcp from 0.0.0.0/0: no SSH, no /32 rule, and no 30000 (Foundry is reached only through nginx, ADR 0008)."
   }
 
   assert {
@@ -205,17 +205,27 @@ run "host_instance_settings" {
 
   assert {
     condition = alltrue([
-      strcontains(aws_instance.host.user_data, "dnf install -y nodejs24 certbot"),
+      strcontains(aws_instance.host.user_data, "dnf install -y nodejs24 certbot nginx"),
       strcontains(aws_instance.host.user_data, "DATA_DEVICE='/dev/disk/by-id/nvme-Amazon_Elastic_Block_Store_vol0123456789abcdef0'"),
       strcontains(aws_instance.host.user_data, "echo \"$DATA_DEVICE /foundry ext4 defaults,nofail 0 2\" >>/etc/fstab"),
       strcontains(aws_instance.host.user_data, "ExecStart=/usr/bin/node-24 /foundry/foundryvtt/main.js"),
       strcontains(aws_instance.host.user_data, "OnCalendar=*-*-* 10:00:00 UTC\nPersistent=true\n"),
       strcontains(aws_instance.host.user_data, "systemctl enable --now certbot-renew.timer"),
       strcontains(aws_instance.host.user_data, "/etc/letsencrypt/renewal-hooks/deploy/foundry.sh"),
-      strcontains(aws_instance.host.user_data, "systemctl try-restart foundry.service"),
       strcontains(aws_instance.host.user_data, "\nRestart=on-failure\nRestartSec=5\n"),
+      # The reverse proxy (ADR 0008): the setup script is installed and run at
+      # first boot, proxies to Foundry's port, and the deploy hook reloads
+      # nginx instead of restarting Foundry.
+      strcontains(aws_instance.host.user_data, "cat >/usr/local/sbin/foundry-proxy-setup <<'PROXY'\n${file("templates/foundry-proxy-setup.sh")}PROXY\n"),
+      strcontains(aws_instance.host.user_data, "\n/usr/local/sbin/foundry-proxy-setup\n"),
+      strcontains(aws_instance.host.user_data, "proxy_pass http://127.0.0.1:30000;"),
+      strcontains(aws_instance.host.user_data, "listen 443 ssl;"),
+      strcontains(aws_instance.host.user_data, "proxy_set_header Upgrade \\$http_upgrade;"),
+      strcontains(aws_instance.host.user_data, "location /.well-known/acme-challenge/ {"),
+      strcontains(aws_instance.host.user_data, "cat >/usr/local/sbin/foundry-cert-deploy <<'HOOK'\n${file("templates/foundry-cert-deploy.sh")}HOOK\n"),
+      strcontains(aws_instance.host.user_data, "systemctl reload nginx"),
     ])
-    error_message = "User data must install Node.js 24 and certbot, the fstab entry for the data volume ID, the unit with Restart=on-failure, the timer override that catches up a missed run at boot, and the deploy hook."
+    error_message = "User data must install Node.js 24, certbot and nginx, the fstab entry for the data volume ID, the unit with Restart=on-failure, the timer override that catches up a missed run at boot, the proxy setup script (run at first boot, proxying 443 to Foundry's 30000 with WebSocket upgrades and certbot's webroot) and the deploy hook that reloads nginx."
   }
 
   assert {
@@ -226,8 +236,10 @@ run "host_instance_settings" {
       strcontains(aws_instance.host.user_data, "enable --now foundry"),
       strcontains(aws_instance.host.user_data, "Restart=no"),
       strcontains(aws_instance.host.user_data, "LABEL=foundry-data /foundry"),
+      strcontains(aws_instance.host.user_data, "systemctl try-restart foundry.service"),
+      strcontains(aws_instance.host.user_data, "Config/foundry.pem"),
     ])
-    error_message = "User data must not keep the preflight line or Restart=no, mount /foundry by label, format a disk, or enable Foundry before the restore."
+    error_message = "User data must not keep the preflight line or Restart=no, mount /foundry by label, format a disk, enable Foundry before the restore, or have the deploy hook restart Foundry or copy the certificate into Config (nginx serves it, ADR 0008)."
   }
 }
 
@@ -338,17 +350,48 @@ run "host_control_role_is_least_privilege" {
   assert {
     condition = alltrue([
       for r in flatten([for s in data.aws_iam_policy_document.host_control.statement : tolist(s.resources) if contains(tolist(s.actions), "ssm:SendCommand")]) :
-      !strcontains(r, ":document/") || r == "arn:aws:ssm:us-west-2:793680745829:document/foundry-shutdown"
+      !strcontains(r, ":document/") || contains([
+        "arn:aws:ssm:us-west-2:793680745829:document/foundry-shutdown",
+        "arn:aws:ssm:us-west-2:793680745829:document/foundry-proxy-setup",
+      ], r)
     ])
-    error_message = "SendCommand may use only the foundry-shutdown document, never AWS-RunShellScript."
+    error_message = "SendCommand may use only the foundry-shutdown and foundry-proxy-setup documents, never AWS-RunShellScript."
   }
 
   assert {
+    condition = alltrue([
+      for d in [aws_ssm_document.shutdown, aws_ssm_document.proxy_setup] :
+      d.document_type == "Command" && !strcontains(d.content, "\"parameters\"")
+    ])
+    error_message = "foundry-shutdown and foundry-proxy-setup must be Command documents with no parameters."
+  }
+
+  # The proxy document (ADR 0008) carries this commit's two proxy scripts and
+  # runs the setup, then points Foundry at the proxy and checks /join on the
+  # host; it restarts Foundry only when its options change.
+  assert {
     condition = (
-      aws_ssm_document.shutdown.document_type == "Command" &&
-      !strcontains(aws_ssm_document.shutdown.content, "\"parameters\"")
+      jsondecode(aws_ssm_document.proxy_setup.content).mainSteps[0].inputs.runCommand == [
+        templatefile("templates/foundry-proxy-apply.sh.tftpl", {
+          proxy_setup = file("templates/foundry-proxy-setup.sh")
+          cert_deploy = file("templates/foundry-cert-deploy.sh")
+        })
+      ] &&
+      jsondecode(aws_ssm_document.proxy_setup.content).mainSteps[0].inputs.timeoutSeconds == "900" &&
+      alltrue([
+        for wanted in [
+          "install_script /usr/local/sbin/foundry-proxy-setup <<'FOUNDRY_PROXY_SETUP'\n${file("templates/foundry-proxy-setup.sh")}FOUNDRY_PROXY_SETUP\n",
+          "install_script /usr/local/sbin/foundry-cert-deploy <<'FOUNDRY_CERT_DEPLOY'\n${file("templates/foundry-cert-deploy.sh")}FOUNDRY_CERT_DEPLOY\n",
+          "\n/usr/local/sbin/foundry-proxy-setup\n",
+          "wanted = {'proxyPort': 443, 'proxySSL': True, 'sslCert': None, 'sslKey': None}",
+          "if [ \"$changed\" = changed ]; then\n  echo \"== foundry.service restart\"\n  systemctl restart foundry.service\nfi\n",
+          "certbot renew --dry-run\n",
+          "--resolve \"$hostname:443:127.0.0.1\" \"https://$hostname/join\"",
+        ] :
+        strcontains(jsondecode(aws_ssm_document.proxy_setup.content).mainSteps[0].inputs.runCommand[0], wanted)
+      ])
     )
-    error_message = "foundry-shutdown must be a Command document with no parameters."
+    error_message = "foundry-proxy-setup must install both proxy scripts from this commit, run the setup, set Foundry's proxy options (restarting it only on a change), test the renewal and check /join through nginx on the host, within 900 seconds."
   }
 }
 
@@ -573,7 +616,7 @@ run "controller_watches_the_host" {
       aws_lambda_function.controller[environment].environment[0].variables == tomap({
         FOUNDRY_AWS_REGION    = "us-west-2"
         FOUNDRY_INSTANCE_ID   = "i-0123456789abcdef0"
-        FOUNDRY_HTTPS_URL     = "https://foundry.craigdevjohnson.com:30000/join"
+        FOUNDRY_HTTPS_URL     = "https://foundry.craigdevjohnson.com/join"
         FOUNDRY_SITE_ROLE_ARN = "arn:aws:iam::793680745829:role/site-${environment}-server"
       })
     ])

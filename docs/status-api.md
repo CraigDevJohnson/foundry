@@ -40,7 +40,7 @@ URL, AWS role or command: those come only from the function's configuration.
 ```json
 {
   "state": "ready",
-  "join_url": "https://foundry.craigdevjohnson.com:30000/join",
+  "join_url": "https://foundry.craigdevjohnson.com/join",
   "started_at": "2026-10-13T18:00:00Z",
   "checked_at": "2026-10-13T18:03:12Z",
   "checks": {
@@ -267,7 +267,7 @@ The first three settings are required:
 | --- | --- |
 | `FOUNDRY_AWS_REGION` | `us-west-2` |
 | `FOUNDRY_INSTANCE_ID` | The host's instance ID, from `aws_instance.host`, so a rebuild updates it |
-| `FOUNDRY_HTTPS_URL` | `https://foundry.craigdevjohnson.com:30000/join` |
+| `FOUNDRY_HTTPS_URL` | `https://foundry.craigdevjohnson.com/join` |
 | `FOUNDRY_SITE_ROLE_ARN` | `arn:aws:iam::<account>:role/site-<env>-server`, the environment's site role. Optional: unset, no caller's Member is logged |
 
 The URL must be exactly `https://host[:port]/join`, with no credentials, query

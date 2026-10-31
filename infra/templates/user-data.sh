@@ -11,7 +11,7 @@ set -euxo pipefail
 # The Elastic IP association can swap the public address while this runs, so
 # retry instead of failing on one dropped connection.
 for attempt in 1 2 3 4 5; do
-  if dnf install -y nodejs24 certbot; then
+  if dnf install -y nodejs24 certbot nginx; then
     break
   fi
   if [ "$attempt" -eq 5 ]; then
@@ -88,9 +88,22 @@ ${chomp(foundry_unit)}
 UNIT
 chmod 0644 /etc/systemd/system/foundry.service
 
+# --- Reverse proxy (ADR 0008) ---
+# nginx answers https://foundry.craigdevjohnson.com on 443 and hands requests
+# to Foundry on 127.0.0.1:30000. The script is idempotent: at first boot there
+# is no certificate, so it serves port 80 only (certbot's challenge and the
+# redirect); after the certificate is issued it is run again by hand and adds
+# port 443 (infra/README.md).
+cat >/usr/local/sbin/foundry-proxy-setup <<'PROXY'
+${chomp(proxy_setup)}
+PROXY
+chmod 0755 /usr/local/sbin/foundry-proxy-setup
+/usr/local/sbin/foundry-proxy-setup
+
 # --- Certificate deploy hook ---
 # The script lives outside /etc/letsencrypt, which the restore overwrites; the
-# hook directory only links to it.
+# hook directory only links to it. It reloads nginx, which serves the
+# certificate from certbot's lineage, so a renewal disconnects nobody.
 cat >/usr/local/sbin/foundry-cert-deploy <<'HOOK'
 ${chomp(cert_deploy)}
 HOOK

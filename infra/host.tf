@@ -31,6 +31,7 @@ locals {
   user_data = templatefile("${path.module}/templates/user-data.sh", {
     node_bin           = local.node_bin
     foundry_unit       = local.foundry_unit
+    proxy_setup        = file("${path.module}/templates/foundry-proxy-setup.sh")
     cert_deploy        = file("${path.module}/templates/foundry-cert-deploy.sh")
     data_volume_device = local.data_volume_device
   })
@@ -168,6 +169,20 @@ resource "aws_instance" "host" {
         !strcontains(local.foundry_unit, "\nRestart=no\n")
       )
       error_message = "host/templates/foundry.service changed: the preflight line must be removed, ExecStart must call ${local.node_bin}, and Restart must be on-failure with RestartSec=5. Update the replace() calls in host.tf."
+    }
+
+    # user data writes each script with a quoted heredoc that ends at that
+    # line, so the script must never contain it, and must end with a newline
+    # so the terminator starts a line of its own.
+    precondition {
+      condition = alltrue([
+        for script, terminator in {
+          "templates/foundry-proxy-setup.sh" = "PROXY"
+          "templates/foundry-cert-deploy.sh" = "HOOK"
+        } :
+        endswith(file("${path.module}/${script}"), "\n") && !can(regex("(?m)^${terminator}$", file("${path.module}/${script}")))
+      ])
+      error_message = "templates/foundry-proxy-setup.sh and templates/foundry-cert-deploy.sh must end with a newline and never contain the line PROXY or HOOK, which end their heredocs in templates/user-data.sh."
     }
   }
 

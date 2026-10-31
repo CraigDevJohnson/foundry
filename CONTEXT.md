@@ -44,6 +44,12 @@ The running Foundry VTT application on the host. Restarting this service is a
 separate operation from stopping and starting the host.
 _Avoid_: Host restart, EC2 restart (when referring to an application restart)
 
+**Reverse proxy**:
+nginx on the host, which answers `https://foundry.craigdevjohnson.com` on
+port 443 and hands each request to the Foundry VTT service on port 30000,
+which only the host can reach (ADR 0008).
+_Avoid_: Load balancer, Cloudflare proxy (neither is in use)
+
 **Session**:
 A period of tabletop play or solo GM preparation on the hosted Foundry VTT
 installation.

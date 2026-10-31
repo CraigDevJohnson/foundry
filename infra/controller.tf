@@ -34,7 +34,7 @@ locals {
 
   # The page players open. The controller's HTTPS probe requires exactly
   # https://host[:port]/join and reports Foundry as responding only on a 200.
-  foundry_join_url = "https://foundry.craigdevjohnson.com:30000/join"
+  foundry_join_url = "https://foundry.craigdevjohnson.com/join"
 
   # The stop runs the same clean shutdown as `task host:stop`, then powers the
   # host off, only if the shutdown exits 0.

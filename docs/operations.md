@@ -17,9 +17,10 @@ Region is us-west-2; otherwise add `--region us-west-2`.
 | Address | Elastic IP `52.27.248.145` (`eipalloc-03508fd8e37c5f068`) |
 | Data volume | `vol-01ef214b56c69e2ad`, ext4 label `foundry-data`, mounted on `/foundry` by `/dev/disk/by-id/nvme-Amazon_Elastic_Block_Store_vol01ef214b56c69e2ad` |
 | Root volume | `vol-0956156f289881032` |
-| Security group | `sg-0aa47e89292e89781`: 80/tcp and 30000/tcp from anywhere, no SSH |
+| Security group | `sg-0aa47e89292e89781`: 80/tcp and 443/tcp from anywhere, no SSH, and no 30000 ([ADR 0008](adr/0008-serve-foundry-on-443-through-nginx-on-the-host.md)) |
 | Snapshots | DLM `policy-0fb1290b3a1a8478c` on both volumes: daily at 10:00 UTC keeping 7, weekly on Sunday at 11:00 UTC keeping 4 |
-| Service | `foundry.service` runs `/usr/bin/node-24 /foundry/foundryvtt/main.js --dataPath=/foundry/foundrydata --port=30000` as `foundry`, with `Restart=on-failure`. `Config/options.json` launches the `blood-lords` world at start |
+| Service | `foundry.service` runs `/usr/bin/node-24 /foundry/foundryvtt/main.js --dataPath=/foundry/foundrydata --port=30000` as `foundry`, with `Restart=on-failure`. `Config/options.json` launches the `blood-lords` world at start and names the proxy (`proxyPort` 443, `proxySSL` true, no `sslCert` or `sslKey`) |
+| Reverse proxy | `nginx.service` answers `https://foundry.craigdevjohnson.com` on 443 and hands requests to Foundry on `127.0.0.1:30000`; port 80 serves certbot's challenge from `/var/lib/foundry-acme` and redirects the rest to HTTPS. `/usr/local/sbin/foundry-proxy-setup` writes its configuration ([The reverse proxy](#the-reverse-proxy)) |
 
 A rebuild changes the instance and root volume IDs; `tofu -chdir=infra output`
 prints the current ones (`host_instance_id` and `root_volume_id`).
@@ -78,12 +79,14 @@ still starting it waits for it to boot, then shuts down as usual.
 with the host.
 
 The **Host control** workflow in GitHub Actions runs the same tasks. Start it
-from the Actions tab, pick `status`, `start` or `stop`, and for `stop` tick
-**nobody playing**. It runs in the `foundry-host` GitHub Environment and
+from the Actions tab, pick `status`, `start`, `stop` or `proxy`, and for
+`stop` and `proxy` tick **nobody playing**. `proxy` runs the
+`foundry-proxy-setup` document ([The reverse proxy](#the-reverse-proxy)). It runs in the `foundry-host` GitHub Environment and
 assumes `foundry-host-control-ci` through the workloads GitHub OIDC provider.
 `infra/bootstrap/roles.tf` makes the role and `infra/ci.tf` sets what it may
 do: only describe instances, start and stop this instance, and run the
-`foundry-shutdown` document on it, never arbitrary commands. Setup, once the role is applied:
+`foundry-shutdown` and `foundry-proxy-setup` documents on it, never
+arbitrary commands. Setup, once the role is applied:
 
 1. Create the `foundry-host` environment under the repository's
    Settings > Environments. Set **Deployment branches** to `main` only: the
@@ -99,13 +102,16 @@ do: only describe instances, start and stop this instance, and run the
 Cloudflare holds `foundry.craigdevjohnson.com` as an A record for
 `52.27.248.145`, proxy status **DNS only**, TTL Auto. It is set by hand
 (aws-setup decision D19); nothing in this repo manages it. Keep it DNS only:
-players connect straight to port 30000, which Cloudflare's proxy doesn't carry.
+players connect straight to the host's nginx on 443
+([ADR 0008](adr/0008-serve-foundry-on-443-through-nginx-on-the-host.md)), and
+certbot's challenge on port 80 reaches the host directly. Turning the proxy
+on is a separate decision, not needed for anything here.
 
 The Elastic IP has `prevent_destroy` and survives a rebuild, so the record
 changes only if the address does. To change it:
 
 1. Check that the new address serves Foundry. This must print `200`:
-   `curl -sS -o /dev/null -w '%{http_code}\n' --resolve foundry.craigdevjohnson.com:30000:<address> https://foundry.craigdevjohnson.com:30000/join`
+   `curl -sS -o /dev/null -w '%{http_code}\n' --resolve foundry.craigdevjohnson.com:443:<address> https://foundry.craigdevjohnson.com/join`
 2. In the Cloudflare dashboard for `craigdevjohnson.com`, open DNS > Records,
    edit `foundry`, set the IPv4 address, leave the proxy status on DNS only,
    and save.
@@ -116,8 +122,11 @@ changes only if the address does. To change it:
 ## Certificate renewal
 
 Certbot keeps the Let's Encrypt certificate in `/etc/letsencrypt` on the root
-volume. It uses the standalone authenticator, which answers the challenge
-itself on port 80. The certificate was renewed on 2026-10-27 and expires on
+volume, and nginx serves it straight from there
+(`/etc/letsencrypt/live/foundry.craigdevjohnson.com`). Certbot answers the
+challenge through nginx with the webroot authenticator
+(`/var/lib/foundry-acme`, served under `/.well-known/acme-challenge/` on
+port 80). The certificate was renewed on 2026-10-27 and expires on
 2027-01-25; the next renewal is due from about 2026-12-26.
 
 - `certbot-renew.timer` must be enabled. On the old host it was found
@@ -128,8 +137,8 @@ itself on port 80. The certificate was renewed on 2026-10-27 and expires on
   before.
 - The host may be off at 10:00 UTC between sessions, so user data's override
   also sets `Persistent=true`: a run missed while the host was off happens
-  within 15 minutes of the next start. A renewal then restarts Foundry
-  (below), so anyone who joined in those minutes is briefly disconnected.
+  within 15 minutes of the next start. A renewal then reloads nginx (below),
+  which keeps open connections, so nobody is disconnected.
 - User data runs only at first boot, and OpenTofu ignores later changes to it.
   The host above was built on 2026-09-29, before `Persistent=true` was added,
   so its override lacks the line. The certbot package's own timer unit sets
@@ -141,11 +150,11 @@ itself on port 80. The certificate was renewed on 2026-10-27 and expires on
   certbot-renew.timer`. The restart records when the timer started; without
   that record the next boot has nothing to catch up from.
 - After a renewal, the deploy hook `/usr/local/sbin/foundry-cert-deploy`,
-  linked from `/etc/letsencrypt/renewal-hooks/deploy/foundry.sh`, copies
-  `fullchain.pem` and `privkey.pem` to `/foundry/foundrydata/Config/foundry.pem`
-  and `foundry.key`, then restarts Foundry if it is running
-  (`systemctl try-restart foundry.service`). The restart briefly disconnects
-  anyone connected. `foundry.sh` must be the only file in that hook directory.
+  linked from `/etc/letsencrypt/renewal-hooks/deploy/foundry.sh`, checks the
+  nginx configuration and reloads nginx (`systemctl reload nginx`), which
+  picks up the renewed files without dropping a connection. Foundry is not
+  restarted and holds no copy of the certificate. `foundry.sh` must be the
+  only file in that hook directory.
 
 Check the timer and the last runs through Session Manager, or with Run Command
 as above:
@@ -164,33 +173,110 @@ aws ssm send-command --profile workloads-admin \
   --query Command.CommandId --output text
 ```
 
-From anywhere, this prints the served certificate's expiry. The timer only
+From anywhere, this prints the certificate nginx serves and its expiry. The timer only
 runs while the host is up, so the date changes at the first run, or catch-up
 at boot, once the certificate is within 30 days of expiry with the host
 running. If the date is still within 30 days after such a run, the renewal
 failed: read the journal.
 
 ```sh
-openssl s_client -connect foundry.craigdevjohnson.com:30000 \
+openssl s_client -connect foundry.craigdevjohnson.com:443 \
   -servername foundry.craigdevjohnson.com </dev/null 2>/dev/null |
   openssl x509 -noout -enddate
 ```
 
 To renew without waiting for the timer, start the timer's service on the host
 while nobody is playing: `sudo systemctl start certbot-renew.service`. Certbot
-renews only when the certificate is due, and the deploy hook then restarts
-Foundry.
+renews only when the certificate is due, and the deploy hook then reloads
+nginx.
 
 `scripts/live-checks.py` does the whole check from Craig's computer in one
 sitting (first run on 2026-10-27, recorded on
 [#25](https://github.com/CraigDevJohnson/foundry/issues/25)): it
-starts the host with Host control, reads the timer and the hook through Run
-Command with `workloads-admin`, adds `Persistent=true` and relinks the hook
-if they are missing, renews now, checks `/join` and the served certificate
-from outside, waits for the browser checks, ends the session with Host
-control, and writes a record to post on the issue. Every command it runs is
+starts the host with Host control, reads the timer, the hook, nginx and the
+renewal's authenticator through Run Command with `workloads-admin`, adds
+`Persistent=true` and relinks the hook if they are missing, renews now,
+checks `/join` and that nginx serves the lineage's certificate from outside,
+waits for the browser checks, ends the session with Host control, and writes
+a record to post on the issue. Every command it runs is
 printed first; `--no-renew`, `--keep-running` and `--no-browser-pause` skip
 the matching steps.
+
+## The reverse proxy
+
+nginx on the host is how players reach Foundry without a port
+([ADR 0008](adr/0008-serve-foundry-on-443-through-nginx-on-the-host.md)):
+`https://foundry.craigdevjohnson.com` on 443 goes to Foundry on
+`127.0.0.1:30000`, WebSocket upgrades included, and `http://` on 80 redirects
+there. The security group opens 80 and 443 only, so 30000 is reached from the
+host alone. `/usr/local/sbin/foundry-proxy-setup`
+([infra/templates/foundry-proxy-setup.sh](../infra/templates/foundry-proxy-setup.sh))
+writes `/etc/nginx/nginx.conf`, `/etc/nginx/conf.d/foundry-http.conf` and,
+once the certificate exists, `/etc/nginx/conf.d/foundry-https.conf`; running
+it again rewrites them, so change the templates in Git, not the files. User
+data installs and runs it on a rebuild ([infra](../infra/README.md#rebuilding-the-host)).
+On a built host, a change to the proxy scripts arrives through the
+`foundry-proxy-setup` document (`infra/ci.tf`): Host control's `proxy`
+action, or `AWS_PROFILE=workloads-admin task host:proxy`, after the Deploy
+run that updates the document. It installs the deployed scripts, runs the
+setup, sets Foundry's options and restarts Foundry only if they changed, so
+tick **nobody playing**. A stopped host is started for it and stopped again
+after.
+
+Foundry's side is in `/foundry/foundrydata/Config/options.json` on the data
+volume: `proxyPort` 443, `proxySSL` true, and `sslCert` and `sslKey` null, so
+Foundry serves plain HTTP on 30000 and writes its invitation links without a
+port. A rebuild restores that file with the rest of the data volume.
+
+Check it from anywhere. The first prints `200`, the second `301` with
+`location: https://foundry.craigdevjohnson.com/`, and the third must fail to
+connect:
+
+```sh
+curl -sS -o /dev/null -w '%{http_code}\n' https://foundry.craigdevjohnson.com/join
+curl -sS -o /dev/null -w '%{http_code} %{redirect_url}\n' http://foundry.craigdevjohnson.com/
+curl -sS -o /dev/null --max-time 10 https://foundry.craigdevjohnson.com:30000/join
+```
+
+On the host, `nginx -t` checks the configuration, `systemctl is-active nginx`
+the service, and `journalctl -u nginx -n 20 --no-pager` and
+`/var/log/nginx/error.log` the last errors. Foundry stopped shows as a 502
+from nginx, which the controller reports as not responding.
+
+### Moving the host built on 2026-09-29 to the proxy
+
+User data runs only at first boot, so the current host gets the proxy
+through the `foundry-proxy-setup` document, once, between sessions: Foundry
+restarts to pick up its new options, which disconnects everyone, and from
+the Deploy apply until the document has run, nobody can reach Foundry at
+all. Once this change is on `main`:
+
+1. Run the Deploy workflow, plan then apply
+   ([infra](../infra/README.md#deploying)). The plan creates the
+   `foundry-proxy-setup` document and lets the Host control role send it,
+   replaces the 30000 ingress rule with 443, and points both controllers at
+   `https://foundry.craigdevjohnson.com/join`. Craig approves both runs.
+2. Run Host control with `proxy` and **nobody playing** ticked. It starts the
+   host if it is stopped, sends the document (nginx, the configuration, the
+   one-time `certbot reconfigure` to the webroot, Foundry's options and a
+   restart, `certbot renew --dry-run`, `/join` through nginx on the host),
+   then checks `/join` from GitHub, and stops the host again if it found it
+   stopped. Read the run's log: the document's output is printed in full.
+3. From your computer, run the three `curl` checks above (the third fails to
+   connect). Then open `https://foundry.craigdevjohnson.com` in a browser,
+   log in as GM, launch a world and have a player join: the game's live
+   connection is the WebSocket through nginx.
+4. Record the date here.
+
+If the workflow can't be used, the same thing by hand, in a Session Manager
+shell as root while nobody is playing (an agent runs it only as a change
+Craig has approved): install `infra/templates/foundry-proxy-setup.sh` and
+`foundry-cert-deploy.sh` from `main` as `/usr/local/sbin/foundry-proxy-setup`
+and `/usr/local/sbin/foundry-cert-deploy` (mode 0755), run
+`foundry-proxy-setup`, set `proxyPort` to 443, `proxySSL` to true and
+`sslCert` and `sslKey` to null in `/foundry/foundrydata/Config/options.json`,
+delete `Config/foundry.pem` and `foundry.key`, `systemctl restart
+foundry.service`, then `certbot renew --dry-run`.
 
 ## Snapshot before an upgrade
 
@@ -300,7 +386,7 @@ Replacing the whole data volume is an OpenTofu change, because the volume has
 machine. After a move or a rebuild the key stays, but the signature no longer
 matches, so Foundry shows its license page until the license is signed again:
 
-1. Open `https://foundry.craigdevjohnson.com:30000/license`.
+1. Open `https://foundry.craigdevjohnson.com/license`.
 2. Accept the end-user license agreement. Foundry signs the key in
    `license.json` for the new host.
 

@@ -6,6 +6,10 @@ name: Host control
 # /foundry/stop_foundry.sh before stopping the instance.
 # Stop is End session. It takes no backup of its own; the next scheduled
 # snapshot holds the finished session.
+# Proxy runs the foundry-proxy-setup document on the host (ADR 0008): it
+# installs the deployed proxy scripts, sets nginx up and points Foundry at
+# it, restarting Foundry only if its options change, so it also needs the
+# confirmation that nobody is playing.
 
 on:
   workflow_dispatch:
@@ -13,10 +17,10 @@ on:
       action:
         description: What to do with the host
         type: choice
-        options: [status, start, stop]
+        options: [status, start, stop, proxy]
         default: status
       nobody_playing:
-        description: For stop, confirm that nobody is playing or preparing
+        description: For stop and proxy, confirm that nobody is playing or preparing
         type: boolean
         default: false
 
@@ -44,10 +48,10 @@ jobs:
       contents: read
       id-token: write # assume the host control role through GitHub OIDC
     steps:
-      - name: Require confirmation before stopping
-        if: inputs.action == 'stop' && !inputs.nobody_playing
+      - name: Require confirmation before stopping or restarting Foundry
+        if: (inputs.action == 'stop' || inputs.action == 'proxy') && !inputs.nobody_playing
         run: |
-          echo "::error::Stopping disconnects everyone. Run again with 'nobody playing' checked."
+          echo "::error::Stopping, or restarting Foundry for the proxy, disconnects everyone. Run again with 'nobody playing' checked."
           exit 1
       - name: Check out repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
