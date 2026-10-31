@@ -4,7 +4,7 @@ vars:
   GO: '{{.GO | default "go"}}'
   GOVULNCHECK_VERSION: v1.7.0
   AWS_REGION: us-west-2
-  FOUNDRY_URL: https://foundry.craigdevjohnson.com:30000
+  FOUNDRY_URL: https://foundry.craigdevjohnson.com
   # The host is found by its tags, so a rebuild needs no change here. The AWS
   # CLI takes credentials from the environment, for example
   # AWS_PROFILE=workloads-admin locally or the OIDC role in GitHub Actions.

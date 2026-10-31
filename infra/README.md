@@ -12,12 +12,12 @@ restores and the license) is in [docs/operations.md](../docs/operations.md).
 | `backend.tf` | State in `foundry-tofu-state-793680745829` (workloads, us-west-2), key `foundry/terraform.tfstate`, native S3 lockfile, profile `var.aws_profile` |
 | `providers.tf` | The workloads provider (`var.aws_profile`, 793680745829), tagging `project=foundry` and ignoring the controller's stop tags (`foundry:stop-command`, `foundry:stop-requested`) |
 | `state.tf` | The state bucket, imported after it is created by CLI, with `prevent_destroy` and a TLS-only bucket policy |
-| `network.tf` | Default VPC, its default subnet in AZ ID `usw2-az2` (us-west-2a in workloads), and the `foundry` security group: 80/tcp and 30000/tcp from `0.0.0.0/0`, all IPv4 egress, no SSH |
+| `network.tf` | Default VPC, its default subnet in AZ ID `usw2-az2` (us-west-2a in workloads), and the `foundry` security group: 80/tcp and 443/tcp from `0.0.0.0/0` (nginx, [ADR 0008](../docs/adr/0008-serve-foundry-on-443-through-nginx-on-the-host.md)), all IPv4 egress, no SSH and no 30000 |
 | `host.tf` | The workloads host: `foundry-host` role (SSM default instance policy, `ssm:GetParameter*` on `parameter/foundry` and `parameter/foundry/*` only, no KMS; exclusive lists for both managed and inline policies) and instance profile, the t4g.small instance (IMDSv2, no key pair, encrypted 10 GiB gp3 root), the 20 GiB `foundry-data` volume with `prevent_destroy`, the Elastic IP with `prevent_destroy`, and the `StatusCheckFailed` alarm to the workloads `alerts` topic (D18) |
 | `backups.tf` | The workloads `foundry-dlm` role and snapshot policy: both volumes tagged `project=foundry`, daily at 10:00 UTC keeping 7, weekly on Sunday at 11:00 UTC keeping 4 |
 | `ci.tf` | What the Host control workflow's `foundry-host-control-ci` role may do (`bootstrap/` makes the role): only describe instances, start and stop the host, and run the parameterless `foundry-shutdown` SSM document (`templates/foundry-shutdown.sh`) on it. A `removed` block hands the role, which this root made first, to `bootstrap/` without deleting it |
 | `controller.tf` | The controller The Lobby's Foundry Tool calls ([ADR 0005](../docs/adr/0005-the-lobby-calls-the-controller-through-a-function-url.md), [ADR 0006](../docs/adr/0006-the-lobby-starts-and-stops-the-host.md)), once per site environment: the `foundry-<env>-controller` Lambda (Go, provided.al2023, arm64) with its log group (30 days), the inline policy of its role, which `bootstrap/` makes inside `foundry-workload-boundary` (own log streams; `ec2:DescribeInstances`, `ssm:DescribeInstanceInformation` and `ssm:GetCommandInvocation`; `ec2:StartInstances` on the host; `ssm:SendCommand` of `foundry-stop` to the host; `ec2:CreateTags` on the host for the two stop tags only; exclusive lists for both managed and inline policies), an `AWS_IAM` Function URL granted only to `site-<env>-server`, and the `foundry-<env>-controller-failing` alarm on Lambda errors to the workloads `alerts` topic. Shared by both: the parameterless `foundry-stop` document (`templates/foundry-stop.sh.tftpl`: it runs `templates/foundry-shutdown.sh` from a file of its own, then `templates/foundry-power-off.sh` only if the shutdown exits 0) and the `foundry-stop-failed` EventBridge rule, which sends a failed, timed-out or cancelled stop to the same topic. A `removed` block forgets the controllers' roles without deleting them, for `bootstrap/` to adopt, if an earlier apply of this root made them |
-| `templates/` | The `foundry-shutdown` script, first-boot user data (no secrets, never formats a disk) and the certbot deploy hook it installs |
+| `templates/` | The `foundry-shutdown` script, first-boot user data (no secrets, never formats a disk), the reverse proxy setup script it installs and runs (`foundry-proxy-setup.sh`: nginx on 443 to Foundry's 30000, the challenge webroot and redirect on 80, idempotent) and the certbot deploy hook it installs (reloads nginx) |
 | `outputs.tf` | Instance, Elastic IP, root volume, data volume, Availability Zone and security group IDs for the runbook, and the controller's URLs and function ARNs per site environment for the-lobby |
 | `variables.tf` | `ami_id` (AL2023 arm64; the instance ignores later changes). Change it only by committing a new default, never with `-var`, so every plan sees the same value. `controller_package_path`, the controller's zip, relative to `infra/` (default `../dist/bootstrap.zip`, which `task build` writes). `aws_profile`, the named profile for the backend and provider (default `workloads-admin`) |
 | `deploy.tfvars` | The Deploy workflow's inputs: `aws_profile = null`, so OpenTofu uses the deploy role's credentials from the environment |
@@ -197,7 +197,7 @@ Lambda refuses a grant to a role it can't find.
 
    This prints the address, `https://<id>.lambda-url.us-west-2.on.aws/`, then
    `403` (an unsigned call is refused), then `204`, then the status JSON, such
-   as `{"state":"ready","join_url":"https://foundry.craigdevjohnson.com:30000/join",...}`.
+   as `{"state":"ready","join_url":"https://foundry.craigdevjohnson.com/join",...}`.
    Repeat with `.prod`. The check never starts or stops the host: those are
    tried through The Lobby, as their own change.
 5. Connect the site. In the-lobby, set `foundry_backend_url` and
@@ -244,19 +244,23 @@ A Deploy plan with **Rebuild host** checked (`-replace=aws_instance.host`)
 keeps the data volume and the Elastic IP (both have `prevent_destroy`), and
 its apply needs the box checked again. The volume attaches only after the new
 instance has booted, so `/foundry` isn't mounted yet, and the new root volume
-has no certificate. After user data finishes (`cloud-init status` reports
-`done`):
+has no certificate: user data's `foundry-proxy-setup` has nginx serving port
+80 only (the challenge and the redirect). After user data finishes
+(`cloud-init status` reports `done`):
 
 ```sh
 sudo mount -a && findmnt /foundry                 # must show the data volume
-sudo certbot certonly --standalone -d foundry.craigdevjohnson.com
-sudo /usr/local/sbin/foundry-cert-deploy          # installs Config/foundry.pem and foundry.key
+sudo certbot certonly --webroot -w /var/lib/foundry-acme -d foundry.craigdevjohnson.com
+sudo /usr/local/sbin/foundry-proxy-setup          # adds port 443 now that the certificate exists
 sudo systemctl enable --now foundry.service
 ```
 
 Don't pass `--deploy-hook` to `certonly`: certbot saves it in the renewal
 config, so each renewal would run the hook twice, once from the config and
-once from the hook directory.
+once from the hook directory. The restored `Config/options.json` already
+names the proxy (`proxyPort` 443, `proxySSL` true, no `sslCert` or `sslKey`,
+[operations](../docs/operations.md#the-reverse-proxy)), so Foundry needs no
+change.
 
 Then re-sign the Foundry license on the new host
 ([operations](../docs/operations.md#license-after-a-rebuild)), and update the

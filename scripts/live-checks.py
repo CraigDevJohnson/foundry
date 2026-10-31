@@ -14,17 +14,21 @@ found, and the run ends with a Markdown record you can post on the issue.
      answer 200. A host that is already running or starting is only checked,
      after you confirm nobody is playing.
   4. Reads the host through Run Command with workloads-admin: /foundry
-     mounted, foundry.service active, certbot-renew.timer enabled and
-     persistent with a next run, its unit files, the last runs, the deploy
-     hook, and the certificate certbot holds and the one Foundry serves.
+     mounted, foundry.service active, nginx active with a valid
+     configuration (the reverse proxy of ADR 0008), certbot-renew.timer
+     enabled and persistent with a next run, its unit files, the last runs,
+     the deploy hook, the renewal's authenticator (webroot, through nginx)
+     and the certificate certbot holds.
   5. If the timer is not persistent, or the deploy hook is not the link it
      should be, fixes it on the host: Persistent=true in the override,
      daemon-reload, restart the timer, relink the hook.
-  6. Renews the certificate now by starting certbot-renew.service (the
-     certificate has been in its renewal window since 2026-10-18). The deploy
-     hook then restarts Foundry. Skip this with --no-renew.
-  7. From this computer: /join answers 200, and the served certificate
-     expires later than 2026-11-17.
+  6. Renews the certificate now by starting certbot-renew.service, if it is
+     due. The deploy hook then reloads nginx, which serves the certificate
+     straight from certbot's lineage; Foundry is not restarted. Skip this
+     with --no-renew.
+  7. From this computer: /join answers 200 on https://foundry.craigdevjohnson.com
+     (no port), nginx serves the lineage's certificate, and it expires later
+     than 2026-11-17.
   8. Pauses for the browser checks: both worlds open, and the GM login and a
      player join-and-save when you can. Skip the pause with --no-browser-pause.
   9. End session with the Host control workflow (action=stop, nobody
@@ -58,8 +62,8 @@ REGION = 'us-west-2'
 ACCOUNT = '793680745829'
 EXPECTED_INSTANCE = 'i-05dfb9abbc1caac32'
 HOSTNAME = 'foundry.craigdevjohnson.com'
-PORT = 30000
-BASE_URL = f'https://{HOSTNAME}:{PORT}'
+PORT = 443
+BASE_URL = f'https://{HOSTNAME}'
 READ_PROFILE = 'workloads-readonly'
 ADMIN_PROFILE = 'workloads-admin'
 # The certificate issued on the old host expires on this day. A renewed one
@@ -70,7 +74,8 @@ HOOK_SCRIPT = '/usr/local/sbin/foundry-cert-deploy'
 HOOK_DIR = '/etc/letsencrypt/renewal-hooks/deploy'
 HOOK_LINK = f'{HOOK_DIR}/foundry.sh'
 LINEAGE = f'/etc/letsencrypt/live/{HOSTNAME}/fullchain.pem'
-SERVED_CERT = '/foundry/foundrydata/Config/foundry.pem'
+RENEWAL_CONF = f'/etc/letsencrypt/renewal/{HOSTNAME}.conf'
+HTTPS_CONF = '/etc/nginx/conf.d/foundry-https.conf'
 # Host control runs this script dispatched, for the message when it stops early.
 DISPATCHED = []
 
@@ -382,7 +387,10 @@ echo "== hook target"; if [ -L {HOOK_LINK} ]; then readlink -f {HOOK_LINK}; elif
 echo "== hook entries"; ls -A1 {HOOK_DIR} 2>&1
 echo "== certificates"; certbot certificates 2>&1
 echo "== lineage"; openssl x509 -noout -enddate -fingerprint -sha256 -in {LINEAGE} 2>&1
-echo "== served file"; openssl x509 -noout -enddate -fingerprint -sha256 -in {SERVED_CERT} 2>&1
+echo "== nginx"; systemctl is-active nginx || true
+echo "== nginx config"; nginx -t 2>&1 || true
+echo "== https config"; if [ -f {HTTPS_CONF} ]; then echo present; else echo missing; fi
+echo "== renewal authenticator"; grep '^authenticator' {RENEWAL_CONF} 2>&1 || true
 exit 0
 '''
 
@@ -408,13 +416,13 @@ echo "== hook target"; readlink -f {HOOK_LINK}
 echo "== hook entries"; ls -A1 {HOOK_DIR}
 '''
 
-# Copies the lineage into Config and restarts Foundry, as certbot's deploy hook
-# would have, for a certificate the timer renewed while the hook link was missing.
+# Reloads nginx, as certbot's deploy hook would have, for a certificate the
+# timer renewed while the hook link was missing: nginx then still serves the
+# old one.
 DEPLOY_SCRIPT = f'''\
 {HOOK_SCRIPT}; rc=$?; echo "== deploy exit"; echo "$rc"
 echo "== lineage"; openssl x509 -noout -enddate -fingerprint -sha256 -in {LINEAGE} 2>&1
-echo "== served file"; openssl x509 -noout -enddate -fingerprint -sha256 -in {SERVED_CERT} 2>&1
-echo "== foundry.service"; for i in $(seq 1 24); do s=$(systemctl is-active foundry.service); [ "$s" = activating ] || break; sleep 5; done; echo "$s"
+echo "== nginx"; systemctl is-active nginx || true
 exit 0
 '''
 
@@ -423,8 +431,8 @@ systemctl start certbot-renew.service; rc=$?; echo "== renew exit"; echo "$rc"
 echo "== journal"; journalctl -u certbot-renew.service -n 30 --no-pager
 echo "== certificates"; certbot certificates 2>&1
 echo "== lineage"; openssl x509 -noout -enddate -fingerprint -sha256 -in {LINEAGE} 2>&1
-echo "== served file"; openssl x509 -noout -enddate -fingerprint -sha256 -in {SERVED_CERT} 2>&1
-echo "== foundry.service"; for i in $(seq 1 24); do s=$(systemctl is-active foundry.service); [ "$s" = activating ] || break; sleep 5; done; echo "$s"
+echo "== nginx"; systemctl is-active nginx || true
+echo "== foundry.service"; systemctl is-active foundry.service || true
 exit 0
 '''
 
@@ -486,14 +494,31 @@ def join_answers(minutes):
         time.sleep(10)
 
 
-def served_expiry():
+def served_certificate():
+    """The certificate nginx serves on port 443: its expiry and SHA-256 fingerprint."""
     say('From this computer: the served certificate')
     client = run(['openssl', 's_client', '-connect', f'{HOSTNAME}:{PORT}',
                   '-servername', HOSTNAME], stdin='', check=False, timeout=30)
-    cert = run(['openssl', 'x509', '-noout', '-enddate', '-subject'],
+    cert = run(['openssl', 'x509', '-noout', '-enddate', '-subject', '-fingerprint', '-sha256'],
                stdin=client.stdout, check=False)
     print(cert.stdout.strip() or cert.stderr.strip())
-    return not_after(cert.stdout)
+    return not_after(cert.stdout), fingerprint(cert.stdout)
+
+
+def nginx_serves_lineage(record, instance_id, lineage_text):
+    """nginx serves the lineage's certificate; reload it by hand if it does not. Returns the expiry."""
+    want = fingerprint(lineage_text)
+    expiry, served = served_certificate()
+    if want is not None and served is not None and served != want:
+        after = run_on_host(instance_id, 'Reload nginx with the renewed certificate', DEPLOY_SCRIPT)
+        record.check(section(after, 'deploy exit') == '0',
+                     'Ran `foundry-cert-deploy` by hand, since nginx was serving a certificate other '
+                     f'than the lineage (exit {section(after, "deploy exit") or "?"})')
+        expiry, served = served_certificate()
+    record.check(want is not None and served == want,
+                 'nginx serves the lineage\'s certificate on port 443 (same SHA-256 fingerprint, '
+                 f'expires {day(expiry)})')
+    return expiry
 
 
 def foundry_status():
@@ -549,11 +574,18 @@ def checks(args, record, instance_id, initial_state):
     hook_ok = script_ok and hook_target == HOOK_SCRIPT
     hook_entries = [e for e in section(output, 'hook entries').splitlines() if e]
     before_lineage = not_after(section(output, 'lineage'))
-    before_served = not_after(section(output, 'served file'))
     certbot_says = re.search(r'Expiry Date: (\S+)', section(output, 'certificates'))
     record.note(f'Before the run: certbot\'s lineage expires {day(before_lineage)}'
-                f'{" (certbot: " + certbot_says.group(1) + ")" if certbot_says else ""}, '
-                f'`Config/foundry.pem` expires {day(before_served)}.')
+                f'{" (certbot: " + certbot_says.group(1) + ")" if certbot_says else ""}.')
+    nginx = section(output, 'nginx')
+    record.check(nginx == 'active', f'nginx is active (found `{nginx}`)')
+    record.check('test is successful' in section(output, 'nginx config'),
+                 'The nginx configuration passes `nginx -t`')
+    record.check(section(output, 'https config') == 'present',
+                 f'nginx serves port 443 (`{HTTPS_CONF}` is present)')
+    authenticator = section(output, 'renewal authenticator')
+    record.check(authenticator == 'authenticator = webroot',
+                 f'Certbot renews through nginx\'s webroot (found `{authenticator or "nothing"}`)')
     last_result = section(output, 'last result')
     record.check(last_result in ('success', ''),
                  f'The last certbot-renew.service run had no errors (Result=`{last_result or "never ran"}`)')
@@ -585,19 +617,7 @@ def checks(args, record, instance_id, initial_state):
     # 4. Renew now
     if args.no_renew:
         record.note('Renewal left to the timer (--no-renew).')
-        if fingerprint(section(output, 'lineage')) != fingerprint(section(output, 'served file')) \
-                and section(output, 'lineage').startswith('notAfter='):
-            after = run_on_host(instance_id, 'Copy the renewed certificate into Config', DEPLOY_SCRIPT)
-            record.check(section(after, 'deploy exit') == '0',
-                         'Ran `foundry-cert-deploy` by hand, since `Config/foundry.pem` was behind the '
-                         f'lineage (exit {section(after, "deploy exit") or "?"})')
-            record.check(fingerprint(section(after, 'lineage')) is not None and
-                         fingerprint(section(after, 'lineage')) == fingerprint(section(after, 'served file')),
-                         '`Config/foundry.pem` holds the lineage\'s certificate (same SHA-256 fingerprint, '
-                         f'expires {day(not_after(section(after, "served file")))})')
-            record.check(section(after, 'foundry.service') == 'active',
-                         '`foundry.service` is active after the deploy hook restarted it')
-            record.check(join_answers(5), '`/join` answers 200 after the restart')
+        expiry = nginx_serves_lineage(record, instance_id, section(output, 'lineage'))
     else:
         renewed = run_on_host(instance_id, 'Renew the certificate now', RENEW_SCRIPT, timeout=1200)
         exit_code = section(renewed, 'renew exit')
@@ -613,27 +633,15 @@ def checks(args, record, instance_id, initial_state):
         else:
             record.check(False, f'Certbot did not renew the certificate (lineage expires {day(lineage)}): '
                                 'read the journal above')
-        # The timer may have renewed while the hook link was missing: then Config still holds
-        # the old certificate and no renewal is due, so run the hook by hand.
-        after = renewed
-        if fingerprint(section(after, 'lineage')) != fingerprint(section(after, 'served file')) \
-                and section(after, 'lineage').startswith('notAfter='):
-            after = run_on_host(instance_id, 'Copy the renewed certificate into Config', DEPLOY_SCRIPT)
-            record.check(section(after, 'deploy exit') == '0',
-                         'Ran `foundry-cert-deploy` by hand, since `Config/foundry.pem` was behind the '
-                         f'lineage (exit {section(after, "deploy exit") or "?"})')
-            renewed_now = True  # the hook restarted Foundry
-        same = fingerprint(section(after, 'lineage'))
-        record.check(same is not None and same == fingerprint(section(after, 'served file')),
-                     f'`Config/foundry.pem` holds the lineage\'s certificate (same SHA-256 fingerprint, '
-                     f'expires {day(not_after(section(after, "served file")))})')
-        record.check(section(after, 'foundry.service') == 'active',
-                     '`foundry.service` is active after the deploy hook restarted it' if renewed_now
-                     else '`foundry.service` is active (no renewal was due, so the hook did not run)')
+        record.check(section(renewed, 'nginx') == 'active', 'nginx is active after the renewal')
+        record.check(section(renewed, 'foundry.service') == 'active',
+                     '`foundry.service` is active: a renewal reloads nginx and never restarts Foundry')
+        # The timer may have renewed while the hook link was missing: then nginx still serves
+        # the old certificate and no renewal is due, so nginx_serves_lineage runs the hook by hand.
+        expiry = nginx_serves_lineage(record, instance_id, section(renewed, 'lineage'))
         record.check(join_answers(5), '`/join` answers 200 after the renewal')
 
     # 5. What the world sees
-    expiry = served_expiry()
     if expiry is None:
         record.check(False, 'Could not read the served certificate from this computer')
     else:
