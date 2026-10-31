@@ -268,6 +268,15 @@ all. Once this change is on `main`:
    connection is the WebSocket through nginx.
 4. Record the date here.
 
+**Done 2026-10-31.** Deploy plan and apply (digest `e0cc61723e8c21a6`, commit
+`6e93745`), then Host control `proxy`
+([run 41216274537](https://github.com/CraigDevJohnson/foundry/actions/runs/41216274537)):
+the document installed nginx, switched the renewal to the webroot, changed
+`options.json` and restarted Foundry, and the dry-run renewal passed. From
+outside, `/join` answers 200 over HTTPS with the Let's Encrypt certificate,
+`http://` answers 301 to HTTPS, port 30000 times out, and a WebSocket upgrade
+answers 101. The browser check in step 3 is still Craig's.
+
 If the workflow can't be used, the same thing by hand, in a Session Manager
 shell as root while nobody is playing (an agent runs it only as a change
 Craig has approved): install `infra/templates/foundry-proxy-setup.sh` and
