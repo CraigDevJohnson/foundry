@@ -1,12 +1,16 @@
+# Weekly updates: minor and patch versions arrive grouped in one pull request
+# per ecosystem, majors arrive one by one, and security fixes are grouped.
+# The cooldown skips releases younger than seven days.
 version: 2
 updates:
-  - package-ecosystem: gomod
+  - package-ecosystem: github-actions
     directory: /
     schedule:
       interval: weekly
-    open-pull-requests-limit: 5
     cooldown:
       default-days: 7
+    open-pull-requests-limit: 5
+    labels: ["dependencies"]
     groups:
       routine:
         applies-to: version-updates
@@ -14,13 +18,33 @@ updates:
       security:
         applies-to: security-updates
         patterns: ["*"]
-  - package-ecosystem: github-actions
+
+  - package-ecosystem: gomod
     directory: /
     schedule:
       interval: weekly
-    open-pull-requests-limit: 5
     cooldown:
       default-days: 7
+    open-pull-requests-limit: 5
+    labels: ["dependencies"]
+    groups:
+      routine:
+        applies-to: version-updates
+        update-types: [minor, patch]
+      security:
+        applies-to: security-updates
+        patterns: ["*"]
+
+  - package-ecosystem: opentofu
+    directories:
+      - /infra
+      - /infra/bootstrap
+    schedule:
+      interval: weekly
+    cooldown:
+      default-days: 7
+    open-pull-requests-limit: 5
+    labels: ["dependencies"]
     groups:
       routine:
         applies-to: version-updates
