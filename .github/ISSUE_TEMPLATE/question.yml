@@ -1,0 +1,17 @@
+name: Question
+description: Ask how something in this repository works.
+labels: ["question", "needs-triage"]
+body:
+  - type: textarea
+    id: question
+    attributes:
+      label: Question
+    validations:
+      required: true
+  - type: textarea
+    id: context
+    attributes:
+      label: Context
+      description: What you already read or tried, such as the README, docs/operations.md or an ADR.
+    validations:
+      required: false

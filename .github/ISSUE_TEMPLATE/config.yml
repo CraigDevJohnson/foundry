@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name: The Lobby's /foundry page
+    url: https://github.com/CraigDevJohnson/the-lobby/issues
+    about: Problems with the /foundry page or signing in to The Lobby belong in the-lobby's issues.
+  - name: Security policy
+    url: https://github.com/CraigDevJohnson/foundry/security/policy
+    about: Report a suspected vulnerability privately, not in a public issue.
