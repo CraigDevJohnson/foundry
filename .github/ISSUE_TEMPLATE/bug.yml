@@ -18,7 +18,7 @@ body:
     attributes:
       label: Steps to reproduce
       placeholder: |
-        1. Start the host from The Lobby's /foundry page
+        1. Start the host with Host control or `task host:start`
         2. Open https://foundry.craigdevjohnson.com
         3. See the error
     validations:

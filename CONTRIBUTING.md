@@ -10,7 +10,8 @@ Virtual Tabletop game. Read the [README](README.md) and the
 2. Make the change and run the checks below.
 3. Open a pull request against `main`. The pull request template asks for the
    checks you ran and whether a Deploy run is needed afterwards.
-4. Codex reviews every pull request. Resolve every review thread.
+4. Codex reviews pull requests (on a Dependabot pull request, ask with
+   `@codex review`). Resolve every review thread.
 5. `main` takes changes only through pull requests, with linear history: use a
    squash merge. The Secret scan and Workflow security checks must pass, and
    the branch must be up to date with `main`.
@@ -22,19 +23,22 @@ Run these before you push. CI runs the same ones.
 | What changed | Command |
 |---|---|
 | Go code (`cmd/`, `internal/`) | `task ci` (formatting, vet, race tests, the Lambda build and govulncheck) |
-| OpenTofu (`infra/`) | `tofu fmt -check -recursive infra`, then `init -backend=false`, `validate` and `test` in `infra` and `infra/bootstrap` |
-| Host tooling (`host/`, `tests/`) | `python3 -m unittest discover -s tests -v` |
+| OpenTofu (`infra/`) | `tofu fmt -check -recursive infra`, then `init -backend=false -input=false -lockfile=readonly`, `validate` and `test` in `infra` and `infra/bootstrap` |
+| Host tooling and the deploy script (`host/`, `scripts/`, `tests/`) | `python3 -m unittest discover -s tests -v` |
 | Workflows (`.github/`) | The Security workflow runs Gitleaks, actionlint and zizmor |
 
 Use Go 1.27.3 or newer, [Task](https://taskfile.dev) 3.x and OpenTofu 1.12.x.
 
 ## Changes that reach AWS
 
-Merging a pull request changes nothing in AWS. The `infra` root reaches AWS
-only through the Deploy workflow, which Craig starts and approves, and which
-applies only the plan he read ([ADR 0007](docs/adr/0007-deploy-from-github-actions.md)).
-Craig applies `infra/bootstrap` by hand. Read [infra/README.md](infra/README.md)
-before you run a plan.
+Merging a pull request changes nothing in AWS. Changes to the `infra` root
+reach AWS through the Deploy workflow, which Craig starts and approves, and
+which applies only the plan he read
+([ADR 0007](docs/adr/0007-deploy-from-github-actions.md)). Craig applies the
+rest by hand with `workloads-admin`: `infra/bootstrap`, and changes to
+`foundry-host`, `foundry-dlm`, the snapshot policy and the state bucket's
+settings, which the deploy role can't make. Read
+[infra/README.md](infra/README.md) before you run a plan.
 
 ## Commit messages and pull request titles
 
