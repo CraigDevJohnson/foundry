@@ -132,7 +132,9 @@ no longer opens ([ADR 0008](docs/adr/0008-serve-foundry-on-443-through-nginx-on-
 
 Use a branch and pull request for changes to `main`. The security workflow scans
 Git history and current files for secrets and checks GitHub Actions workflows.
-Dependabot checks Go modules and GitHub Actions dependencies weekly.
+Dependabot checks GitHub Actions, Go modules and the OpenTofu AWS provider (in
+`infra` and `infra/bootstrap`) weekly. A provider bump changes nothing in AWS
+until the next Deploy run, or Craig's next by-hand apply of `infra/bootstrap`.
 
 Run `python3 -m unittest discover -s tests -v` for the offline host contract
 suite. The Host contract workflow also parses the systemd templates without
