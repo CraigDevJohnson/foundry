@@ -1,0 +1,61 @@
+name: Bug report
+description: Something about Foundry, its host, the controller, or a workflow doesn't work.
+labels: ["bug", "needs-triage"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Leave out credentials, player data and personal details. Report a security problem through the security policy instead.
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened
+      description: What you saw, including any error text.
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      placeholder: |
+        1. Start the host with Host control or `task host:start`
+        2. Open https://foundry.craigdevjohnson.com
+        3. See the error
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: What you expected
+    validations:
+      required: true
+  - type: dropdown
+    id: area
+    attributes:
+      label: Where
+      options:
+        - Foundry VTT or a game world
+        - The host (EC2, nginx, certificates, snapshots)
+        - The controller (status, start, stop)
+        - Infrastructure (OpenTofu, the Deploy workflow)
+        - Host control or another workflow
+        - Docs
+        - Not sure
+    validations:
+      required: true
+  - type: input
+    id: reference
+    attributes:
+      label: Commit or Actions run
+      description: A commit SHA or a link to the Actions run, if there is one.
+    validations:
+      required: false
+  - type: checkboxes
+    id: confirm
+    attributes:
+      label: Before you file
+      options:
+        - label: I searched the open issues and this is not a duplicate.
+          required: true
+        - label: I left out credentials, player data and personal details.
+          required: true

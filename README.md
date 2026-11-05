@@ -1,5 +1,9 @@
 # Foundry
 
+[![CI](https://github.com/CraigDevJohnson/foundry/actions/workflows/ci.yml/badge.svg)](https://github.com/CraigDevJohnson/foundry/actions/workflows/ci.yml)
+[![Security](https://github.com/CraigDevJohnson/foundry/actions/workflows/security.yml/badge.svg)](https://github.com/CraigDevJohnson/foundry/actions/workflows/security.yml)
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+
 The management plane for Craig's hosted Foundry Virtual Tabletop (Foundry VTT)
 application and the AWS EC2 instance that runs it.
 
@@ -150,7 +154,7 @@ capture/validation/materialization is available for offline testing. Backups
 are the Data Lifecycle Manager snapshots ([infra](infra/README.md)); End
 session takes no backup of its own ([#7](https://github.com/CraigDevJohnson/foundry/issues/7)).
 
-Use Go 1.27.2 or newer and [Task](https://taskfile.dev) 3.x, and run `task ci`
+Use Go 1.27.3 or newer and [Task](https://taskfile.dev) 3.x, and run `task ci`
 for formatting, vet, race-enabled tests, a Linux ARM64 Lambda build, and
 vulnerability checks. `task build` produces `dist/bootstrap.zip`, the same
 zip for the same source. See the [status reference](docs/status-api.md) for
@@ -160,6 +164,15 @@ The OpenTofu root in `infra/` uses OpenTofu 1.12.x. CI runs `tofu fmt -check`
 and `tofu validate` on it without AWS credentials. Read
 [infra/README.md](infra/README.md) before running a plan.
 
+## Contributing
+
+See [CONTRIBUTING.md](CONTRIBUTING.md) for how changes land, the checks to
+run and how changes reach AWS, and the [code of conduct](CODE_OF_CONDUCT.md).
+
 ## Security
 
 See [SECURITY.md](SECURITY.md) for private vulnerability reporting.
+
+## License
+
+[MIT](LICENSE).
