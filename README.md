@@ -136,8 +136,9 @@ Dependabot checks GitHub Actions, Go modules and the OpenTofu AWS provider (in
 `infra` and `infra/bootstrap`) weekly. A provider bump changes nothing in AWS
 until the next Deploy run, or Craig's next by-hand apply of `infra/bootstrap`.
 Minor and patch updates merge on their own once the required checks pass
-(`.github/workflows/dependabot-auto-merge.yml`); major updates, and minor
-updates of a 0.x dependency, wait for Craig's review.
+(`.github/workflows/dependabot-auto-merge.yml`); major updates, minor
+updates of a 0.x dependency, and every GitHub Actions update wait for Craig's
+review.
 
 Run `python3 -m unittest discover -s tests -v` for the offline host contract
 suite. The Host contract workflow also parses the systemd templates without
@@ -159,7 +160,7 @@ capture/validation/materialization is available for offline testing. Backups
 are the Data Lifecycle Manager snapshots ([infra](infra/README.md)); End
 session takes no backup of its own ([#7](https://github.com/CraigDevJohnson/foundry/issues/7)).
 
-Use Go 1.27.3 or newer and [Task](https://taskfile.dev) 3.x, and run `task ci`
+Use Go 1.27.4 or newer and [Task](https://taskfile.dev) 3.x, and run `task ci`
 for formatting, vet, race-enabled tests, a Linux ARM64 Lambda build, and
 vulnerability checks. `task build` produces `dist/bootstrap.zip`, the same
 zip for the same source. See the [status reference](docs/status-api.md) for
