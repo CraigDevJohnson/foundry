@@ -284,10 +284,12 @@ data "aws_iam_policy_document" "deployer" {
   # Reading the bucket's own settings, which state.tf manages. Changing them
   # stays with Craig's admin sign-in, so a deploy can't loosen who reaches
   # the state. On the bucket's ARN, s3:Get* matches only bucket-level reads:
-  # an object read needs an object's ARN.
+  # an object read needs an object's ARN. The AWS provider (6.71.0) reads the
+  # bucket's tags through S3 Control's ListTagsForResource, which s3:Get*
+  # doesn't match.
   statement {
     sid       = "StateBucketSettingsRead"
-    actions   = ["s3:Get*"]
+    actions   = ["s3:Get*", "s3:ListTagsForResource"]
     resources = [local.state_bucket_arn]
   }
 
