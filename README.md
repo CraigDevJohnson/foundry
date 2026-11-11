@@ -136,8 +136,9 @@ Dependabot checks GitHub Actions, Go modules and the OpenTofu AWS provider (in
 `infra` and `infra/bootstrap`) weekly. A provider bump changes nothing in AWS
 until the next Deploy run, or Craig's next by-hand apply of `infra/bootstrap`.
 Minor and patch updates merge on their own once the required checks pass
-(`.github/workflows/dependabot-auto-merge.yml`); major updates, and minor
-updates of a 0.x dependency, wait for Craig's review.
+(`.github/workflows/dependabot-auto-merge.yml`); major updates, minor
+updates of a 0.x dependency, and every GitHub Actions update wait for Craig's
+review.
 
 Run `python3 -m unittest discover -s tests -v` for the offline host contract
 suite. The Host contract workflow also parses the systemd templates without
