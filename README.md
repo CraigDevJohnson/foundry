@@ -160,7 +160,7 @@ capture/validation/materialization is available for offline testing. Backups
 are the Data Lifecycle Manager snapshots ([infra](infra/README.md)); End
 session takes no backup of its own ([#7](https://github.com/CraigDevJohnson/foundry/issues/7)).
 
-Use Go 1.27.3 or newer and [Task](https://taskfile.dev) 3.x, and run `task ci`
+Use Go 1.27.4 or newer and [Task](https://taskfile.dev) 3.x, and run `task ci`
 for formatting, vet, race-enabled tests, a Linux ARM64 Lambda build, and
 vulnerability checks. `task build` produces `dist/bootstrap.zip`, the same
 zip for the same source. See the [status reference](docs/status-api.md) for

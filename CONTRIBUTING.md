@@ -27,7 +27,7 @@ Run these before you push. CI runs the same ones.
 | Host tooling and the deploy script (`host/`, `scripts/`, `tests/`) | `python3 -m unittest discover -s tests -v` |
 | Workflows (`.github/`) | The Security workflow runs Gitleaks, actionlint and zizmor |
 
-Use Go 1.27.3 or newer, [Task](https://taskfile.dev) 3.x and OpenTofu 1.12.x.
+Use Go 1.27.4 or newer, [Task](https://taskfile.dev) 3.x and OpenTofu 1.12.x.
 
 ## Changes that reach AWS
 
