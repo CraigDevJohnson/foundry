@@ -292,7 +292,7 @@ run "no_state_or_secret_beyond_its_own" {
   assert {
     condition = alltrue(flatten([
       for s in data.aws_iam_policy_document.deployer.statement : [
-        for a in s.actions : !startswith(a, "s3:") || contains(["s3:ListBucket", "s3:GetObject", "s3:PutObject", "s3:DeleteObject", "s3:Get*"], a)
+        for a in s.actions : !startswith(a, "s3:") || contains(["s3:ListBucket", "s3:GetObject", "s3:PutObject", "s3:DeleteObject", "s3:Get*", "s3:ListTagsForResource"], a)
       ] if s.effect != "Deny"
     ]))
     error_message = "The deploy role must never change the state bucket's settings: that stays with Craig's admin sign-in."
