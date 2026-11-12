@@ -174,6 +174,7 @@ and `tofu validate` on it without AWS credentials. Read
 
 See [CONTRIBUTING.md](CONTRIBUTING.md) for how changes land, the checks to
 run and how changes reach AWS, and the [code of conduct](CODE_OF_CONDUCT.md).
+[CHANGELOG.md](CHANGELOG.md) lists the notable changes.
 
 ## Security
 
