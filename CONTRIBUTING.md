@@ -9,8 +9,8 @@ Virtual Tabletop game. Read the [README](README.md) and the
 1. Branch from `main` (fork first if you can't push here).
 2. Make the change and run the checks below.
 3. Open a pull request against `main`. The pull request template asks for the
-   checks you ran and whether a Deploy run is needed afterwards. Add a line to [CHANGELOG.md](CHANGELOG.md) for a change worth telling
-   someone about.
+   checks you ran and whether a Deploy run is needed afterwards. Add a line
+   to [CHANGELOG.md](CHANGELOG.md) for a change worth telling someone about.
 4. Codex reviews pull requests (on a Dependabot pull request, ask with
    `@codex review`). Resolve every review thread.
 5. `main` takes changes only through pull requests, with linear history: use a
