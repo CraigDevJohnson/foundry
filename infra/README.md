@@ -40,6 +40,14 @@ tofu -chdir=infra/bootstrap validate
 tofu -chdir=infra/bootstrap test
 ```
 
+Where this file runs `aws` or `tofu` from a computer, a cloud thread counts
+too; [AGENTS.md](../AGENTS.md) says what one is and how it signs in. The
+tools and profiles are the same there, so the same commands and approvals
+apply, including to what Craig applies with `workloads-admin`. It has no
+interactive Session Manager shell; [operations](../docs/operations.md) says
+what that leaves. Starting and approving a Deploy run stay Craig's, on a
+phone or any browser.
+
 A plan from a computer, to look before a Deploy run, needs an Identity Center
 session (`aws sso login --sso-session identity-center`) because the backend
 and providers default to the admin profile. It also needs the controller's

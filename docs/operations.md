@@ -9,6 +9,12 @@ on the host (Run Command, Session Manager) uses `workloads-admin`, and an agent
 runs it only as a change Craig has approved. The commands assume the profile's
 Region is us-west-2; otherwise add `--region us-west-2`.
 
+A cloud thread ([AGENTS.md](../AGENTS.md)) has these profiles and the same
+tools, so the `aws` and `tofu` commands here apply there too, under the same
+approval rule. It has no interactive Session Manager shell. That leaves Run
+Command, which no cloud thread has tried yet (2026-11-17). The browser steps
+(the game checks and the license page) stay Craig's, on any browser.
+
 ## Host
 
 | Item | Value |
@@ -200,7 +206,8 @@ checks `/join` and that nginx serves the lineage's certificate from outside,
 waits for the browser checks, ends the session with Host control, and writes
 a record to post on the issue. Every command it runs is
 printed first; `--no-renew`, `--keep-running` and `--no-browser-pause` skip
-the matching steps.
+the matching steps. It asks its questions at a terminal, so a cloud thread
+can't run it as it is.
 
 ## The reverse proxy
 

@@ -19,6 +19,8 @@ entry names its pull request. Routine Dependabot updates are left out.
 ### Changed
 
 - The deploy role can read the state bucket's tags through S3 Control (#41).
+- The operator docs cover running their steps from a cloud thread, not only
+  from Craig's computer (#45).
 
 ### Security
 
