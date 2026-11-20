@@ -14,8 +14,9 @@ Virtual Tabletop game. Read the [README](README.md) and the
 4. Codex reviews pull requests (on a Dependabot pull request, ask with
    `@codex review`). Resolve every review thread.
 5. `main` takes changes only through pull requests, with linear history: use a
-   squash merge. The Secret scan and Workflow security checks must pass, and
-   the branch must be up to date with `main`.
+   squash merge. The Secret scan, Workflow security, Go checks, OpenTofu
+   checks and Offline lifecycle and templates checks must pass, and the branch
+   must be up to date with `main`.
 
 ## Checks
 
